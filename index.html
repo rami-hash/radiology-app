@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <title>Radiology Interactive Course</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 
@@ -275,6 +278,15 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       background: #000;
+      touch-action: auto;
+    }
+    @media (max-width: 768px) {
+      #dicomFrame {
+        height: 60vh;
+        border-radius: 8px;
+      }
+      #question .page { padding: 80px 12px 40px; }
+      #dicomMobileHint { display: block !important; }
     }
 
     /* Image */
@@ -714,6 +726,310 @@
       transition: all 0.15s;
     }
     .remove-field-btn:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ===================== REVIEW MODE ===================== */
+    .review-case {
+      margin-bottom: 32px;
+    }
+    .review-case-header {
+      background: var(--accent);
+      color: #fff;
+      border-radius: 12px 12px 0 0;
+      padding: 14px 20px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .review-question {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      padding: 20px;
+    }
+    .review-question:last-child { border-radius: 0 0 12px 12px; }
+    .review-question + .review-question { border-top: 1px solid var(--border); }
+    .review-q-text {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    .review-answer-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 6px;
+      font-size: 14px;
+    }
+    .review-tag {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .review-tag.correct  { background: rgba(92,45,126,0.1);  color: var(--accent); }
+    .review-tag.wrong    { background: rgba(192,57,43,0.1);  color: var(--danger); }
+    .review-tag.user-ok  { background: rgba(92,45,126,0.15); color: var(--accent); }
+    .review-tag.user-bad { background: rgba(192,57,43,0.15); color: var(--danger); }
+    .review-explanation {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: rgba(92,45,126,0.04);
+      border-left: 3px solid var(--accent2);
+      border-radius: 0 8px 8px 0;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+    .review-points {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    /* ===================== CASE STATS ===================== */
+    .review-case-stats {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 14px 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      margin-bottom: 0;
+    }
+    .review-case-stats + .review-question { border-top: 1px solid var(--border); }
+    .stats-bar-wrapper {
+      flex: 1;
+    }
+    .stats-bar-track {
+      width: 100%;
+      height: 8px;
+      background: var(--surface2);
+      border-radius: 20px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .stats-bar-fill {
+      height: 100%;
+      border-radius: 20px;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width 0.6s ease;
+    }
+    .stats-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .stats-score {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+    /* Summary bar at top of review */
+    .review-summary {
+      background: var(--accent);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .review-summary-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .review-summary-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 28px;
+      font-weight: 600;
+      color: #fff;
+    }
+    .review-summary-lbl {
+      font-size: 11px;
+      color: rgba(255,255,255,0.6);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .review-summary-divider {
+      width: 1px;
+      height: 40px;
+      background: rgba(255,255,255,0.2);
+    }
+
+
+
+
+    /* ===================== ADMIN PANEL ===================== */
+    .admin-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+    .admin-stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 16px;
+      text-align: center;
+      transition: box-shadow 0.2s;
+    }
+    .admin-stat-card:hover { box-shadow: 0 4px 16px rgba(92,45,126,0.1); }
+    .admin-stat-card--active {
+      background: rgba(92,45,126,0.06);
+      border-color: rgba(92,45,126,0.3);
+    }
+    .admin-stat-icon { font-size: 22px; margin-bottom: 8px; }
+    .admin-stat-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 30px;
+      font-weight: 600;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .admin-stat-lbl {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .admin-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .admin-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text);
+    }
+    .admin-section-header--active {
+      background: rgba(92,45,126,0.08);
+      border-bottom-color: rgba(92,45,126,0.2);
+    }
+    .admin-live-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      background: var(--accent);
+      color: #fff;
+      padding: 3px 10px;
+      border-radius: 20px;
+      animation: pulse 2s infinite;
+    }
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    .admin-table th {
+      text-align: left;
+      padding: 12px 20px;
+      color: var(--muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      background: var(--surface);
+    }
+    .admin-table td { padding: 12px 20px; }
+    .admin-table tr { border-bottom: 1px solid var(--border); transition: background 0.15s; }
+    .admin-table tr:last-child { border-bottom: none; }
+    .admin-table tbody tr:hover { background: rgba(92,45,126,0.03); }
+    .admin-login {
+      max-width: 360px;
+      margin: 60px auto;
+      text-align: center;
+    }
+    .admin-login input {
+      width: 100%;
+      padding: 13px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 15px;
+      font-family: 'DM Sans', sans-serif;
+      margin-bottom: 12px;
+      outline: none;
+      text-align: center;
+      letter-spacing: 3px;
+    }
+    .admin-login input:focus { border-color: var(--accent); }
+
+    /* ===================== MOBILE OPTIMIZATION ===================== */
+    @media (max-width: 768px) {
+      /* Welcome screen */
+      .welcome-layout { flex-direction: column; }
+      .welcome-hero-panel { min-height: 220px; padding: 32px 24px; }
+      .welcome-hero-title { font-size: 32px; }
+      .welcome-stats { gap: 16px; }
+      .welcome-form-panel { width: 100%; padding: 32px 24px; }
+
+      /* Top bar */
+      #topBar { padding: 0 16px; }
+      #topBarCenter { font-size: 11px; }
+
+      /* Progress */
+      #progressLabel { font-size: 10px; right: 16px; }
+
+      /* Answer buttons — single column on mobile */
+      #optionsContainer {
+        grid-template-columns: 1fr !important;
+      }
+
+      /* Feedback */
+      #feedbackIcon { font-size: 40px; }
+      #feedbackTitle { font-size: 28px; }
+
+      /* Results */
+      .score-display { font-size: 36px; }
+      .results-hero { padding: 32px 0 20px; }
+
+      /* Admin */
+      .admin-grid { grid-template-columns: repeat(2, 1fr); }
+      .admin-header { flex-direction: column; }
+      .admin-table { font-size: 12px; }
+      .admin-table th, .admin-table td { padding: 8px 12px; }
+
+      /* Review */
+      .review-case-header { font-size: 13px; }
+
+      /* Exit button */
+      #exitBtn { bottom: 16px; right: 16px; padding: 10px 20px; font-size: 13px; }
+    }
+
+    @media (max-width: 480px) {
+      .welcome-hero-panel { min-height: 180px; padding: 24px 20px; }
+      .welcome-hero-title { font-size: 26px; }
+      .welcome-form-panel { padding: 24px 20px; }
+      .admin-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .admin-stat-num { font-size: 22px; }
+    }
   </style>
 </head>
 <body>
@@ -766,6 +1082,7 @@
       <div class="welcome-form-panel">
         <div class="welcome-top-title">Radiology Challenge</div>
         <h2 class="welcome-heading">Interactive Radiology Course</h2>
+
         <div class="welcome-card">
           <div class="name-form">
             <input type="text" id="nameInput" placeholder="Your full name" maxlength="80" autocomplete="off">
@@ -779,6 +1096,105 @@
             </button>
           </div>
         </div>
+        <p style="text-align:center;margin-top:20px;font-size:12px;color:var(--muted);">
+          Admin? <a href="#" onclick="showScreen('adminLogin')" style="color:var(--accent);text-decoration:none;font-weight:600;">Click here</a>
+        </p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ==================== ADMIN LOGIN ==================== -->
+  <div id="adminLogin" class="screen">
+    <div class="page">
+      <div class="admin-login">
+        <h2 style="font-family:'DM Serif Display',serif;font-size:28px;margin-bottom:8px;">Admin Access</h2>
+        <p style="color:var(--muted);font-size:14px;margin-bottom:24px;">Enter your admin password to continue.</p>
+        <input type="password" id="adminPassword" placeholder="••••••••" onkeydown="if(event.key==='Enter') openAdmin()">
+        <span id="adminError" style="display:none;color:var(--danger);font-size:12px;margin-bottom:12px;display:none;">Incorrect password.</span>
+        <button class="btn btn-primary btn-full" onclick="openAdmin()">Access Panel</button>
+        <br><br>
+        <button class="btn btn-secondary" onclick="showScreen('welcome')">← Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ADMIN PANEL ==================== -->
+  <div id="admin" class="screen">
+    <div class="page">
+
+      <!-- Header -->
+      <div class="admin-header">
+        <div>
+          <h2 style="font-family:'DM Serif Display',serif;font-size:32px;margin-bottom:4px;">Admin Panel</h2>
+          <p id="adminStatus" style="color:var(--muted);font-size:12px;font-family:'JetBrains Mono',monospace;margin:0;"></p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="loadAdminData()">↺ Refresh</button>
+          <button class="btn btn-secondary" onclick="exportAdminCSV()">↓ Export CSV</button>
+          <button class="btn btn-secondary" onclick="showScreen('welcome')">← Exit</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="admin-grid">
+        <div class="admin-stat-card">
+          <div class="admin-stat-icon">🏆</div>
+          <div class="admin-stat-num" id="adminStatTotal">—</div>
+          <div class="admin-stat-lbl">Completed</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-icon">📊</div>
+          <div class="admin-stat-num" id="adminStatAvg">—</div>
+          <div class="admin-stat-lbl">Avg Score</div>
+        </div>
+        <div class="admin-stat-card">
+          <div class="admin-stat-icon">⭐</div>
+          <div class="admin-stat-num" id="adminStatBest">—</div>
+          <div class="admin-stat-lbl">Best Score</div>
+        </div>
+        <div class="admin-stat-card admin-stat-card--active">
+          <div class="admin-stat-icon">⏱</div>
+          <div class="admin-stat-num" id="adminStatProgress">—</div>
+          <div class="admin-stat-lbl">In Progress</div>
+        </div>
+      </div>
+
+      <!-- In progress section -->
+      <div class="admin-section">
+        <div class="admin-section-header admin-section-header--active">
+          <span>⏱ Currently In Progress</span>
+          <span class="admin-live-badge">LIVE</span>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Current Position</th>
+              <th style="text-align:right">Score</th>
+            </tr>
+          </thead>
+          <tbody id="adminProgressBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Completed section -->
+      <div class="admin-section">
+        <div class="admin-section-header">
+          <span>🏆 Completed Participants</span>
+        </div>
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th style="text-align:right">Score</th>
+            </tr>
+          </thead>
+          <tbody id="adminScoresBody"></tbody>
+        </table>
       </div>
 
     </div>
@@ -798,7 +1214,7 @@
       </div>
 
       <p style="color:var(--muted);font-size:14px;margin-bottom:24px;">
-        Review the clinical details above, then examine the imaging and select your diagnosis. 
+        Review the clinical details above, then examine the imaging and select your diagnosis. You have <strong style="color:var(--text)">90 seconds</strong>.
       </p>
 
       <button class="btn btn-primary" onclick="goToQuestion()">View Imaging & Answer →</button>
@@ -810,7 +1226,7 @@
     <div class="page">
       <div class="question-header">
         <div class="q-label" id="questionNumber">Case 1 / 5</div>
-        
+        <div class="q-label">What is the diagnosis?</div>
       </div>
 
       <!-- Clinical note -->
@@ -823,6 +1239,9 @@
       <!-- DICOM viewer -->
       <div id="dicomSection" style="display:none">
         <div class="dicom-label">DICOM Viewer — Interactive</div>
+        <div id="dicomMobileHint" style="display:none;font-size:12px;color:var(--muted);margin-bottom:8px;text-align:center;">
+          👆 Use two fingers to zoom · Pinch to zoom in/out
+        </div>
         <button id="dicomRefreshBtn" onclick="refreshDicom()" title="Reload viewer">↺ Reload viewer</button>
         <iframe id="dicomFrame" allowfullscreen></iframe>
       </div>
@@ -877,8 +1296,19 @@
 
       <div style="display:flex;gap:12px;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="goToLeaderboard()">View Leaderboard</button>
+        <button class="btn btn-secondary" onclick="goToReview()">Review Answers</button>
         
       </div>
+    </div>
+  </div>
+
+  <!-- ==================== REVIEW ==================== -->
+  <div id="review" class="screen">
+    <div class="page">
+      <h2 style="font-family:'DM Serif Display',serif;font-size:32px;margin-bottom:8px;">Review</h2>
+      <p style="color:var(--muted);font-size:14px;margin-bottom:28px;">All cases and questions with your answers.</p>
+      <div id="reviewContent"></div>
+      <button class="btn btn-secondary" onclick="showScreen('results')" style="margin-top:16px;">← Back to results</button>
     </div>
   </div>
 
@@ -894,6 +1324,6 @@
   </div>
 
   <button id="exitBtn" class="btn btn-primary" onclick="confirmExit()">Exit</button>
-  <script src="app.js"></script>
+  <script src="app_final.js"></script>
 </body>
 </html>
