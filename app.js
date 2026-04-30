@@ -1525,17 +1525,20 @@ function saveSettings() {
   const endDate   = document.getElementById("adminEndDate").value;
   const isActive  = document.getElementById("adminIsActive").checked;
 
+  const saveBody = {
+    action:    "saveSettings",
+    startDate: startDate,
+    endDate:   endDate,
+    isActive:  isActive
+  };
+  console.log("Saving settings:", JSON.stringify(saveBody));
   fetch(SETTINGS_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      action:    "saveSettings",
-      startDate: startDate,
-      endDate:   endDate,
-      isActive:  isActive
-    })
+    body: JSON.stringify(saveBody)
   })
-  .then(r => r.json())
+  .then(r => { console.log("Save status:", r.status); return r.json(); })
+  .then(data => { console.log("Save response:", JSON.stringify(data)); })
   .then(() => {
     courseSettings = { startDate, endDate, isActive };
     const msg = document.getElementById("adminSettingsMsg");
