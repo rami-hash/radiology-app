@@ -1327,15 +1327,35 @@ function loadAdminData() {
   const statusEl = document.getElementById("adminStatus");
   statusEl.innerText = "Loading data...";
 
+  // Set today as default dates
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 16);
+  const endDefault = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  const startInput  = document.getElementById("adminStartDate");
+  const endInput    = document.getElementById("adminEndDate");
+  const activeInput = document.getElementById("adminIsActive");
+  if (startInput) startInput.value = todayStr;
+  if (endInput)   endInput.value   = endDefault;
+
   // Load current settings into form
   loadCourseSettings().then(s => {
     if (!s) return;
-    const startInput = document.getElementById("adminStartDate");
-    const endInput   = document.getElementById("adminEndDate");
-    const activeInput = document.getElementById("adminIsActive");
     if (startInput && s.startDate) startInput.value = s.startDate.slice(0, 16);
     if (endInput   && s.endDate)   endInput.value   = s.endDate.slice(0, 16);
-    if (activeInput) activeInput.checked = s.isActive;
+    if (activeInput) activeInput.checked = s.isActive !== false;
+
+    // Show course status badge
+    const statusEl = document.getElementById("adminCourseStatus");
+    if (statusEl) {
+      const access = checkCourseAccess();
+      if (access.allowed) {
+        statusEl.innerText = "🟢 Active";
+        statusEl.style.cssText = "font-size:12px;padding:3px 12px;border-radius:20px;font-weight:600;background:rgba(46,160,67,0.12);color:#2ea043;";
+      } else {
+        statusEl.innerText = "🔴 Closed";
+        statusEl.style.cssText = "font-size:12px;padding:3px 12px;border-radius:20px;font-weight:600;background:rgba(192,57,43,0.12);color:var(--danger);";
+      }
+    }
   });
 
   // Load all data from admin flow
