@@ -306,13 +306,16 @@ function loadQuestion() {
       mobileBtn.id = "dicomMobileOpenBtn";
       mobileBtn.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;background:#000;border-radius:12px;border:1px solid var(--border);gap:16px;";
       mobileBtn.innerHTML = `
-        <div style="color:rgba(255,255,255,0.6);font-size:13px;text-align:center;padding:0 20px;">
-          DICOM viewer works best in full screen on mobile
+        <div style="font-size:28px;margin-bottom:4px;">🖥️</div>
+        <div style="color:#fff;font-size:15px;font-weight:600;text-align:center;padding:0 24px;">
+          Best viewed on desktop
         </div>
-        <button onclick="window.open('${q.imageUrl}', '_blank')" style="background:var(--accent);color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">
-          🔬 Open DICOM Viewer
+        <div style="color:rgba(255,255,255,0.55);font-size:13px;text-align:center;padding:0 24px;line-height:1.5;">
+          For the best experience with DICOM viewers, please use a desktop browser.
+        </div>
+        <button onclick="window.open('${q.imageUrl}', '_blank')" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:10px;padding:11px 22px;font-size:13px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;">
+          Try anyway →
         </button>
-        <div style="color:rgba(255,255,255,0.4);font-size:11px;">Opens in a new tab</div>
       `;
       dicomSection.appendChild(mobileBtn);
     } else {
