@@ -291,23 +291,50 @@ function loadQuestion() {
   imageSection.style.display = "none";
 
   if (q.imageType === "dicom" && q.imageUrl) {
-    // DICOM interactive viewer
     dicomSection.style.display = "block";
-    const oldFrame = document.getElementById("dicomFrame");
-    if (oldFrame) oldFrame.remove();
-    const newFrame = document.createElement("iframe");
-    newFrame.id = "dicomFrame";
-    newFrame.allowFullscreen = true;
-    newFrame.onload = () => {
-      try {
-        const iframeDoc = newFrame.contentDocument || newFrame.contentWindow.document;
-        const style = iframeDoc.createElement("style");
-        style.textContent = ".sidebar, .table-of-contents, nav, #sidebar, [class*='sidebar'], [class*='contents'], [class*='navigation'] { display: none !important; } .main-content, .content, [class*='content'] { margin-left: 0 !important; width: 100% !important; }";
-        iframeDoc.head.appendChild(style);
-      } catch(e) {}
-    };
-    newFrame.src = q.imageUrl;
-    dicomSection.appendChild(newFrame);
+
+    const isMobile = window.innerWidth <= 768;
+
+    if (isMobile) {
+      // On mobile: show a button to open in new tab
+      const oldFrame = document.getElementById("dicomFrame");
+      if (oldFrame) oldFrame.remove();
+      const oldBtn = document.getElementById("dicomMobileOpenBtn");
+      if (oldBtn) oldBtn.remove();
+
+      const mobileBtn = document.createElement("div");
+      mobileBtn.id = "dicomMobileOpenBtn";
+      mobileBtn.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;background:#000;border-radius:12px;border:1px solid var(--border);gap:16px;";
+      mobileBtn.innerHTML = `
+        <div style="color:rgba(255,255,255,0.6);font-size:13px;text-align:center;padding:0 20px;">
+          DICOM viewer works best in full screen on mobile
+        </div>
+        <button onclick="window.open('${q.imageUrl}', '_blank')" style="background:var(--accent);color:#fff;border:none;border-radius:10px;padding:14px 28px;font-size:15px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;">
+          🔬 Open DICOM Viewer
+        </button>
+        <div style="color:rgba(255,255,255,0.4);font-size:11px;">Opens in a new tab</div>
+      `;
+      dicomSection.appendChild(mobileBtn);
+    } else {
+      // On desktop: show iframe as normal
+      const oldMobileBtn = document.getElementById("dicomMobileOpenBtn");
+      if (oldMobileBtn) oldMobileBtn.remove();
+      const oldFrame = document.getElementById("dicomFrame");
+      if (oldFrame) oldFrame.remove();
+      const newFrame = document.createElement("iframe");
+      newFrame.id = "dicomFrame";
+      newFrame.allowFullscreen = true;
+      newFrame.onload = () => {
+        try {
+          const iframeDoc = newFrame.contentDocument || newFrame.contentWindow.document;
+          const style = iframeDoc.createElement("style");
+          style.textContent = ".sidebar, .table-of-contents, nav, #sidebar, [class*='sidebar'], [class*='contents'], [class*='navigation'] { display: none !important; } .main-content, .content, [class*='content'] { margin-left: 0 !important; width: 100% !important; }";
+          iframeDoc.head.appendChild(style);
+        } catch(e) {}
+      };
+      newFrame.src = q.imageUrl;
+      dicomSection.appendChild(newFrame);
+    }
 
   } else if (q.imageType === "image" && q.imageUrl) {
     // Static radiology image
@@ -772,6 +799,13 @@ function refreshDicom() {
   const q = c.questions[currentQuestionIndex];
   if (!q || q.imageType !== "dicom" || !q.imageUrl) return;
 
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) {
+    // On mobile just open in new tab
+    const q2 = cases[currentCaseIndex].questions[currentQuestionIndex];
+    if (q2 && q2.imageUrl) window.open(q2.imageUrl, "_blank");
+    return;
+  }
   const btn = document.getElementById("dicomRefreshBtn");
   if (btn) { btn.innerText = "↺ Reloading..."; btn.disabled = true; }
 
