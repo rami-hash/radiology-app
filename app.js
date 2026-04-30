@@ -12,6 +12,8 @@ const ACCESS_CODE = "RADIOLOGY2024";
 // ⬇️ Change this to your admin password
 const ADMIN_CODE = "ADMIN2024";
 
+const SETTINGS_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/9e18f9e38d014b7189c1e4f91dc819e0/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=5LppNh5CuHS8PMzgcxzDaJ1_-IX3j_el1J_gp21UvzQ";
+
 const ADMIN_FLOW_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/19009f69a506409da4b40fd75005627b/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=E8bv71g2MAEhbYv3LkL1Xl3e0mlG3KY1sKQ1btPwf2E";
 
 let cases = [];  // populated by loadCasesFromSharePoint()
@@ -190,10 +192,10 @@ function loadProgress(email) {
 const FLOW_GET_URL  = FLOW_URL;
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Set timer display to 45:00 without starting it
   const display = document.getElementById("courseTimeDisplay");
   if (display) display.innerText = "45:00";
   loadCasesFromSharePoint();
+  loadCourseSettings();
 });
 
 // =======================
@@ -459,6 +461,13 @@ function startCourse() {
     alert(window.caseLoadFailed
       ? "Could not load cases from SharePoint. Please check your Power Automate flow and refresh."
       : "Cases are still loading. Please wait a moment and try again.");
+    return;
+  }
+
+  // Check course schedule
+  const access = checkCourseAccess();
+  if (!access.allowed) {
+    alert(access.message);
     return;
   }
 
@@ -1318,6 +1327,17 @@ function loadAdminData() {
   const statusEl = document.getElementById("adminStatus");
   statusEl.innerText = "Loading data...";
 
+  // Load current settings into form
+  loadCourseSettings().then(s => {
+    if (!s) return;
+    const startInput = document.getElementById("adminStartDate");
+    const endInput   = document.getElementById("adminEndDate");
+    const activeInput = document.getElementById("adminIsActive");
+    if (startInput && s.startDate) startInput.value = s.startDate.slice(0, 16);
+    if (endInput   && s.endDate)   endInput.value   = s.endDate.slice(0, 16);
+    if (activeInput) activeInput.checked = s.isActive;
+  });
+
   // Load all data from admin flow
   fetch(ADMIN_FLOW_URL, {
     method: "POST",
@@ -1449,4 +1469,77 @@ function exportAdminCSV() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// =======================
+// COURSE SETTINGS
+// =======================
+
+let courseSettings = null;
+
+function loadCourseSettings() {
+  return fetch(SETTINGS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getSettings" })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const rows = Array.isArray(data) ? data : (data.value || []);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    courseSettings = {
+      startDate: row.StartDate || row.field_1 || null,
+      endDate:   row.EndDate   || row.field_2 || null,
+      isActive:  row.IsActive  !== undefined ? row.IsActive : true
+    };
+    return courseSettings;
+  })
+  .catch(err => {
+    console.error("Settings load error:", err);
+    return null;
+  });
+}
+
+function checkCourseAccess() {
+  if (!courseSettings) return { allowed: true };
+
+  const now   = new Date();
+  const start = courseSettings.startDate ? new Date(courseSettings.startDate) : null;
+  const end   = courseSettings.endDate   ? new Date(courseSettings.endDate)   : null;
+
+  if (!courseSettings.isActive) {
+    return { allowed: false, message: "This course is currently not available." };
+  }
+  if (start && now < start) {
+    return { allowed: false, message: "The course has not started yet.\n\nStart date: " + start.toLocaleDateString() + " " + start.toLocaleTimeString() };
+  }
+  if (end && now > end) {
+    return { allowed: false, message: "This course has ended.\n\nEnd date: " + end.toLocaleDateString() + " " + end.toLocaleTimeString() };
+  }
+  return { allowed: true };
+}
+
+function saveSettings() {
+  const startDate = document.getElementById("adminStartDate").value;
+  const endDate   = document.getElementById("adminEndDate").value;
+  const isActive  = document.getElementById("adminIsActive").checked;
+
+  fetch(SETTINGS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action:    "saveSettings",
+      startDate: startDate,
+      endDate:   endDate,
+      isActive:  isActive
+    })
+  })
+  .then(r => r.json())
+  .then(() => {
+    courseSettings = { startDate, endDate, isActive };
+    const msg = document.getElementById("adminSettingsMsg");
+    if (msg) { msg.innerText = "✅ Settings saved!"; setTimeout(() => msg.innerText = "", 3000); }
+  })
+  .catch(err => console.error("Settings save error:", err));
 }
