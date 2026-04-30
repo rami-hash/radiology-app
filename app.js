@@ -1566,3 +1566,69 @@ function saveSettings() {
   })
   .catch(err => console.error("Settings save error:", err));
 }
+
+// =======================
+// ADMIN TABS
+// =======================
+
+function switchAdminTab(tab) {
+  // Update tab buttons
+  document.querySelectorAll(".admin-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("onclick") === `switchAdminTab('${tab}')`);
+  });
+
+  // Show correct panel
+  document.querySelectorAll(".admin-panel").forEach(panel => {
+    panel.classList.remove("active");
+  });
+  const activePanel = document.getElementById("adminPanel" + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (activePanel) activePanel.classList.add("active");
+}
+
+// =======================
+// SHARE RESULTS
+// =======================
+
+function getShareText() {
+  const score = window.finalScoreOutOf10 || 0;
+  const name  = playerName || "I";
+  return `${name} scored ${score}/10 on the EBR Radiology Challenge! 🩻 #Radiology #EDiR #EBR`;
+}
+
+function shareLinkedIn() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://www.linkedin.com/sharing/share-offsite/?url=https://www.myebr.org&summary=${text}`;
+  window.open(url, "_blank", "width=600,height=600");
+}
+
+function shareTwitter() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://twitter.com/intent/tweet?text=${text}`;
+  window.open(url, "_blank", "width=600,height=400");
+}
+
+function shareWhatsApp() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://wa.me/?text=${text}`;
+  window.open(url, "_blank");
+}
+
+function copyToClipboard(text, btn, original) {
+  navigator.clipboard.writeText(text).then(() => {
+    if (btn) { btn.innerText = "✅ Copied!"; setTimeout(() => btn.innerText = original, 2000); }
+  }).catch(() => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (btn) { btn.innerText = "✅ Copied!"; setTimeout(() => btn.innerText = original, 2000); }
+  });
+}
+
+function copyResult() {
+  const btn = document.querySelector(".share-btn-copy");
+  copyToClipboard(getShareText(), btn, "📋 Copy");
+}
+
