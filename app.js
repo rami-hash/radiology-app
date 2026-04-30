@@ -2,10 +2,17 @@
 // CASES — loaded from SharePoint at runtime
 // =======================
 
+
+
 const CASES_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/2e49d8eaeb7743d196df2e6d5a03505d/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=6-8RZ3mHEYkyLDOYLPDCmCJ-WMvO97oOBvpUE66YPdE";
 
 // ⬇️ Change this to your access code
 const ACCESS_CODE = "RADIOLOGY2024";
+
+// ⬇️ Change this to your admin password
+const ADMIN_CODE = "ADMIN2024";
+
+const ADMIN_FLOW_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/19009f69a506409da4b40fd75005627b/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=E8bv71g2MAEhbYv3LkL1Xl3e0mlG3KY1sKQ1btPwf2E";
 
 let cases = [];  // populated by loadCasesFromSharePoint()
 
@@ -109,6 +116,77 @@ function loadCasesFromSharePoint() {
 
 const FLOW_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d50cd79685cc4bc3a7452afdc487e9ae/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=sVNU58FUOCBk2BOTCX8J3VLK5CSkQQyTv1RlX_klbVg";
 const FLOW_POST_URL = FLOW_URL;
+
+const PROGRESS_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/93c3fb02264d47ce932eccfadcef24be/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=SphA_-MMQ3V2UC0kN8_4Mjshe_6QACEfp2dddrwIah0";
+
+// =======================
+// SAVE / LOAD PROGRESS
+// =======================
+
+function saveProgress() {
+  if (!playerEmail) return;
+  fetch(PROGRESS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action:        "saveProgress",
+      email:         playerEmail,
+      name:          playerName,
+      caseIndex:     currentCaseIndex,
+      questionIndex: currentQuestionIndex,
+      score:         score,
+      answers:       JSON.stringify(userAnswers),
+      timeLeft:      courseTimeLeft
+    })
+  })
+  .then(res => console.log("Progress saved, status:", res.status, "case:", currentCaseIndex, "q:", currentQuestionIndex, "score:", score))
+  .catch(err => console.error("Progress save error:", err));
+}
+
+function clearProgress() {
+  console.log("clearProgress called, email:", playerEmail);
+  if (!playerEmail) { console.warn("No email — skipping clearProgress"); return; }
+  fetch(PROGRESS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "clearProgress",
+      email:  playerEmail
+    })
+  })
+  .then(res => { console.log("Progress cleared, status:", res.status); return res.text(); })
+  .then(txt => console.log("Clear response:", txt))
+  .catch(err => console.error("Progress clear error:", err));
+}
+
+function loadProgress(email) {
+  return fetch(PROGRESS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getProgress", email: email })
+  })
+  .then(res => res.json())
+  .then(data => {
+    console.log("Progress raw data:", JSON.stringify(data).slice(0, 500));
+    const rows = Array.isArray(data) ? data : (data.value || []);
+    if (rows.length === 0) { console.log("No progress found"); return null; }
+    const row = rows[0];
+    console.log("Progress row:", JSON.stringify(row).slice(0, 300));
+    return {
+      name:          row.PlayerName   || row.field_1     || "",
+      caseIndex:     row.CaseIndex    !== undefined ? Number(row.CaseIndex)    : (row.field_2 !== undefined ? Number(row.field_2) : 0),
+      questionIndex: row.QuestionIndex !== undefined ? Number(row.QuestionIndex) : (row.field_3 !== undefined ? Number(row.field_3) : 0),
+      score:         row.Score        !== undefined ? Number(row.Score)        : (row.field_4 !== undefined ? Number(row.field_4) : 0),
+      answers:       row.Answers      || row.field_5      || "{}",
+      timeLeft:      row.TimeLeft     !== undefined ? Number(row.TimeLeft)     : (row.field_6 !== undefined ? Number(row.field_6) : 2700)
+    };
+  })
+  .catch(err => {
+    console.error("Progress load error:", err);
+    return null;
+  });
+}
+
 const FLOW_GET_URL  = FLOW_URL;
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -128,6 +206,10 @@ let playerEmail = "";
 
 let currentCaseIndex = 0;
 let currentQuestionIndex = 0;
+
+// Store user answers for review mode
+// Format: { caseIndex_questionIndex: { userAnswer, isCorrect, pointsEarned } }
+let userAnswers = {};
 
 // Calculate total questions across all cases for scoring
 function totalQuestions() {
@@ -296,7 +378,6 @@ function loadQuestion() {
     q.options.forEach(opt => {
       const btn = document.createElement("button");
       btn.className = "answer-btn";
-      btn.dataset.code = opt.code;
       btn.innerHTML = "<strong>" + opt.code + "</strong> — " + opt.label;
 
       if (isMulti) {
@@ -323,59 +404,65 @@ function loadQuestion() {
 
 // Called by the Start button in the welcome screen
 function startCourse() {
-  const nameInput = document.getElementById("nameInput").value.trim();
+  const nameInput  = document.getElementById("nameInput").value.trim();
   const emailInput = document.getElementById("emailInput").value.trim();
-
-  const codeInput = document.getElementById("accessCode")
-    ? document.getElementById("accessCode").value.trim().toUpperCase()
-    : ACCESS_CODE;
+  const codeEl     = document.getElementById("accessCode");
+  const codeInput  = codeEl ? codeEl.value.trim().toUpperCase() : ACCESS_CODE;
 
   let valid = true;
-
-  if (!nameInput) {
-    document.getElementById("nameError").style.display = "block";
-    valid = false;
-  } else {
-    document.getElementById("nameError").style.display = "none";
-  }
+  if (!nameInput) { document.getElementById("nameError").style.display = "block"; valid = false; }
+  else              document.getElementById("nameError").style.display = "none";
 
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailInput || !emailRegex.test(emailInput)) {
-    document.getElementById("emailError").style.display = "block";
-    valid = false;
-  } else {
-    document.getElementById("emailError").style.display = "none";
-  }
+  if (!emailInput || !emailRegex.test(emailInput)) { document.getElementById("emailError").style.display = "block"; valid = false; }
+  else document.getElementById("emailError").style.display = "none";
 
-  if (codeInput !== ACCESS_CODE) {
-    document.getElementById("codeError").style.display = "block";
-    valid = false;
-  } else {
-    document.getElementById("codeError").style.display = "none";
-  }
+  if (codeInput !== ACCESS_CODE) { document.getElementById("codeError").style.display = "block"; valid = false; }
+  else document.getElementById("codeError").style.display = "none";
 
   if (!valid) return;
 
-  playerName = nameInput;
+  playerName  = nameInput;
   playerEmail = emailInput;
 
   if (cases.length === 0) {
-    if (window.caseLoadFailed) {
-      alert("Could not load cases from SharePoint. Please check your Power Automate flow and refresh the page.");
-    } else {
-      alert("Cases are still loading. Please wait a moment and try again.");
-    }
+    alert(window.caseLoadFailed
+      ? "Could not load cases from SharePoint. Please check your Power Automate flow and refresh."
+      : "Cases are still loading. Please wait a moment and try again.");
     return;
   }
 
-  currentCaseIndex = 0;
-  currentQuestionIndex = 0;
-  score = 0;
+  const loadingEl = document.getElementById("loadingScreen");
+  const welcomeEl = document.getElementById("welcome");
+  if (loadingEl) loadingEl.classList.add("active");
+  if (welcomeEl) welcomeEl.classList.remove("active");
 
-  startCourseTimer();
-  updateProgress();
-  loadCaseIntro();
-  showScreen("caseIntro");
+  loadProgress(emailInput).then(saved => {
+    if (loadingEl) loadingEl.classList.remove("active");
+
+    if (saved && saved.answers && saved.answers !== "{}" && saved.caseIndex !== -1) {
+      // Restore saved progress
+      currentCaseIndex     = saved.caseIndex;
+      currentQuestionIndex = saved.questionIndex;
+      score                = saved.score;
+      courseTimeLeft       = saved.timeLeft;
+      try { userAnswers = JSON.parse(saved.answers); } catch(e) { userAnswers = {}; }
+      playerName = saved.name || playerName;
+
+      startCourseTimer();
+      updateProgress();
+      // Go directly to the question they were on
+      showScreen("question");
+      setTimeout(() => loadQuestion(), 50);
+    } else {
+      currentCaseIndex = 0; currentQuestionIndex = 0; score = 0; userAnswers = {};
+
+      startCourseTimer();
+      updateProgress();
+      loadCaseIntro();
+      showScreen("caseIntro");
+    }
+  });
 }
 
 function goToQuestion() {
@@ -388,6 +475,7 @@ function goToQuestion() {
 function nextCase() {
   currentCaseIndex++;
   currentQuestionIndex = 0;
+  saveProgress(); // save with updated caseIndex
   updateProgress();
 
   if (currentCaseIndex < cases.length) {
@@ -408,6 +496,7 @@ function goToResults() {
     ? Math.round((score / (totalQ * 10)) * 100) / 10
     : 0;
 
+  clearProgress(); // remove saved progress on completion
   sendResultToSharePoint();
 
   const maxScore = totalQ * 10;
@@ -499,7 +588,7 @@ function updateTopBar() {
   const activeScreen = document.querySelector(".screen.active");
   const screenId = activeScreen ? activeScreen.id : "";
 
-  if (["question","caseIntro","feedback"].includes(screenId)) {
+  if (["question","caseIntro","feedback"].includes(screenId) && screenId !== "admin" && screenId !== "adminLogin") {
     center.style.display = "flex";
     exitBtn.style.display = "inline-flex";
     crumb.innerHTML =
@@ -572,6 +661,11 @@ function answerQuestion(selectedAnswer) {
   const fs = document.getElementById("freetextSubmit");
   if (fs) fs.disabled = true;
 
+  // Store answer for review mode
+  const answerKey = currentCaseIndex + "_" + currentQuestionIndex;
+  if (!userAnswers[answerKey]) userAnswers[answerKey] = { userAnswers: [], isCorrect: false, pointsEarned: 0 };
+  userAnswers[answerKey].userAnswers.push(selectedAnswer);
+
   // Partial scoring: track how many correct answers have been selected
   if (!window.mcSelectedCorrect) window.mcSelectedCorrect = 0;
   if (isCorrect) window.mcSelectedCorrect++;
@@ -580,9 +674,9 @@ function answerQuestion(selectedAnswer) {
   const totalCorrect = correctAnswers.length;
   const pointsPerAnswer = Math.floor(10 / totalCorrect);
   const bonusPoint = 10 % totalCorrect; // extra point for first answer if not divisible
-  const pointsEarned = isCorrect
+  const pointsEarned = Math.min(10, isCorrect
     ? (window.mcSelectedCorrect === 1 ? pointsPerAnswer + bonusPoint : pointsPerAnswer)
-    : 0;
+    : 0);
   score += pointsEarned;
 
   showFeedback(isCorrect, q, correctAnswers.length, pointsEarned);
@@ -603,6 +697,12 @@ function showFeedback(isCorrect, q, totalCorrect, pointsEarned) {
     ? "+" + pointsEarned + " pts" + (numCorrect > 1 ? " (" + pointsEarned + " of 10)" : "")
     : "+0 pts";
   document.getElementById("scoreGained").style.color = isCorrect ? "var(--accent)" : "var(--danger)";
+
+  // Update review tracking
+  const answerKey = currentCaseIndex + "_" + currentQuestionIndex;
+  if (!userAnswers[answerKey]) userAnswers[answerKey] = { userAnswers: [], isCorrect: false, pointsEarned: 0 };
+  userAnswers[answerKey].isCorrect    = isCorrect;
+  userAnswers[answerKey].pointsEarned = pointsEarned;
 
   // Find labels for ALL correct answers
   const correctCodes = q.correctAnswer.split(",").map(a => a.trim().toUpperCase());
@@ -636,12 +736,11 @@ function handleNext() {
   const isLastQuestion = currentQuestionIndex >= c.questions.length - 1;
 
   if (!isLastQuestion) {
-    // More questions in this case — stay on same DICOM, load next question
     currentQuestionIndex++;
+    saveProgress(); // save with updated questionIndex
     showScreen("question");
     loadQuestion();
   } else {
-    // Move to next case
     nextCase();
   }
 }
@@ -654,9 +753,10 @@ function sendResultToSharePoint() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      name:  playerName,
-      email: playerEmail,
-      score: window.finalScoreOutOf10 || 0
+      action: "saveScore",
+      name:   playerName,
+      email:  playerEmail,
+      score:  window.finalScoreOutOf10 || 0
     })
   })
   .then(res => console.log("Score saved, status:", res.status))
@@ -866,7 +966,7 @@ function submitFreetext() {
     }
   });
 
-  const pointsEarned = Math.round(correctCount * pointsPerField * 10) / 10;
+  const pointsEarned = Math.min(10, Math.round(correctCount * pointsPerField * 10) / 10);
 
   // Color each field green/red
   for (let i = 0; i < numFields; i++) {
@@ -877,6 +977,15 @@ function submitFreetext() {
   }
 
   score += pointsEarned;
+
+  // Store for review mode
+  const ftKey = currentCaseIndex + "_" + currentQuestionIndex;
+  userAnswers[ftKey] = {
+    userAnswers:  typed,
+    isCorrect:    correctCount === numFields,
+    pointsEarned: pointsEarned,
+    isFreetext:   true
+  };
 
   const allCorrect  = correctCount === numFields;
   const someCorrect = correctCount > 0 && correctCount < numFields;
@@ -936,11 +1045,19 @@ function submitMultiSelect() {
 
   // Give partial points: points per correct answer selected, minus wrong selections
   const pointsPerCorrect = Math.round(10 / correctAnswers.length);
-  const earned = Math.max(0, (correctSelected.length * pointsPerCorrect) - (wrongSelected.length * pointsPerCorrect));
+  const earned = Math.min(10, Math.max(0, (correctSelected.length * pointsPerCorrect) - (wrongSelected.length * pointsPerCorrect)));
   score += earned;
 
   const isCorrect = correctSelected.length > 0 && wrongSelected.length === 0;
   const isPartial = correctSelected.length > 0 && (wrongSelected.length > 0 || correctSelected.length < correctAnswers.length);
+
+  // Store for review mode
+  const msKey = currentCaseIndex + "_" + currentQuestionIndex;
+  userAnswers[msKey] = {
+    userAnswers: window.selectedCodes || [],
+    isCorrect:   isCorrect || isPartial,
+    pointsEarned: earned
+  };
 
   // Show feedback
   const feedbackIcon  = document.getElementById("feedbackIcon");
@@ -980,4 +1097,319 @@ function submitMultiSelect() {
   }
 
   showScreen("feedback");
+}
+
+// =======================
+// REVIEW MODE
+// =======================
+
+function goToReview() {
+  showScreen("review");
+  const container = document.getElementById("reviewContent");
+  container.innerHTML = "";
+
+  // Build overall summary
+  let totalEarned = 0;
+  let totalMax    = 0;
+  let totalCorrect = 0;
+  let totalQs     = 0;
+
+  cases.forEach((c, ci) => {
+    c.questions.forEach((q, qi) => {
+      const ua = userAnswers[ci + "_" + qi] || {};
+      totalEarned  += ua.pointsEarned || 0;
+      totalMax     += 10;
+      totalQs++;
+      if (ua.isCorrect) totalCorrect++;
+    });
+  });
+
+  const overallPct = totalMax > 0 ? Math.round((totalEarned / totalMax) * 100) : 0;
+  const finalDisplay = Math.round(totalEarned * 10) / 10;
+
+  // Summary banner
+  const summary = document.createElement("div");
+  summary.className = "review-summary";
+  summary.innerHTML = `
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${finalDisplay} / ${totalMax}</div>
+      <div class="review-summary-lbl">Total points</div>
+    </div>
+    <div class="review-summary-divider"></div>
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${overallPct}%</div>
+      <div class="review-summary-lbl">Overall score</div>
+    </div>
+    <div class="review-summary-divider"></div>
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${totalCorrect} / ${totalQs}</div>
+      <div class="review-summary-lbl">Correct answers</div>
+    </div>
+  `;
+  container.appendChild(summary);
+
+  cases.forEach((c, ci) => {
+    const caseDiv = document.createElement("div");
+    caseDiv.className = "review-case";
+
+    // Calculate case stats
+    let caseEarned = 0;
+    let caseMax    = 0;
+    c.questions.forEach((q, qi) => {
+      const ua = userAnswers[ci + "_" + qi] || {};
+      caseEarned += ua.pointsEarned || 0;
+      caseMax    += 10;
+    });
+    const casePct = caseMax > 0 ? Math.round((caseEarned / caseMax) * 100) : 0;
+    const caseDisplay = Math.round(caseEarned * 10) / 10;
+
+    // Case header
+    const header = document.createElement("div");
+    header.className = "review-case-header";
+    header.innerHTML = "Case " + (ci + 1) + " — " + c.intro;
+    caseDiv.appendChild(header);
+
+    // Case stats bar
+    const statsBar = document.createElement("div");
+    statsBar.className = "review-case-stats";
+    statsBar.innerHTML = `
+      <div class="stats-bar-wrapper">
+        <div class="stats-label">Score</div>
+        <div class="stats-bar-track">
+          <div class="stats-bar-fill" style="width:${casePct}%"></div>
+        </div>
+      </div>
+      <div class="stats-score">${caseDisplay} / ${caseMax} pts</div>
+    `;
+    caseDiv.appendChild(statsBar);
+
+    // Questions
+    c.questions.forEach((q, qi) => {
+      const key = ci + "_" + qi;
+      const ua  = userAnswers[key] || {};
+      const correctCodes = q.correctAnswer.split(",").map(a => a.trim().toUpperCase());
+
+      // Resolve correct answer labels
+      const correctLabels = correctCodes.map(code => {
+        const opt = q.options.find(o => o.code === code);
+        return opt ? opt.label : code;
+      });
+
+      // Resolve user answer labels
+      // For freetext, answers are already text labels
+      // For MC, answers are codes that need resolving
+      const userAnswerList = (ua.userAnswers || []).map(a => {
+        if (ua.isFreetext) return a; // already a text label
+        const opt = q.options.find(o => o.code === a);
+        return opt ? opt.label : a;
+      });
+
+      const qDiv = document.createElement("div");
+      qDiv.className = "review-question";
+
+      // Question text
+      const qText = document.createElement("div");
+      qText.className = "review-q-text";
+      qText.innerHTML = "Q" + (qi + 1) + ": " + q.text;
+      qDiv.appendChild(qText);
+
+      // User answer
+      const userRow = document.createElement("div");
+      userRow.className = "review-answer-row";
+      const userTag = document.createElement("span");
+      userTag.className = "review-tag " + (ua.isCorrect ? "user-ok" : "user-bad");
+      userTag.innerText = ua.isCorrect ? "✅ Your answer" : "❌ Your answer";
+      const userVal = document.createElement("span");
+      userVal.innerText = userAnswerList.length > 0 ? userAnswerList.join(", ") : "Not answered";
+      userRow.appendChild(userTag);
+      userRow.appendChild(userVal);
+      qDiv.appendChild(userRow);
+
+      // Correct answer (only show if wrong)
+      if (!ua.isCorrect) {
+        const correctRow = document.createElement("div");
+        correctRow.className = "review-answer-row";
+        const correctTag = document.createElement("span");
+        correctTag.className = "review-tag correct";
+        correctTag.innerText = "✓ Correct";
+        const correctVal = document.createElement("span");
+        correctVal.innerText = correctLabels.join(" / ");
+        correctRow.appendChild(correctTag);
+        correctRow.appendChild(correctVal);
+        qDiv.appendChild(correctRow);
+      }
+
+      // Points
+      const pts = document.createElement("div");
+      pts.className = "review-points";
+      pts.innerText = "+" + (ua.pointsEarned || 0) + " pts";
+      qDiv.appendChild(pts);
+
+      // Explanation
+      if (q.explanation) {
+        const exp = document.createElement("div");
+        exp.className = "review-explanation";
+        exp.innerText = q.explanation;
+        qDiv.appendChild(exp);
+      }
+
+      caseDiv.appendChild(qDiv);
+    });
+
+    container.appendChild(caseDiv);
+  });
+}
+
+
+// =======================
+// ADMIN PANEL
+// =======================
+
+function openAdmin() {
+  const pwd = document.getElementById("adminPassword");
+  if (!pwd) return;
+  if (pwd.value.trim().toUpperCase() !== ADMIN_CODE) {
+    document.getElementById("adminError").style.display = "block";
+    return;
+  }
+  document.getElementById("adminError").style.display = "none";
+  showScreen("admin");
+  loadAdminData();
+}
+
+function loadAdminData() {
+  const statusEl = document.getElementById("adminStatus");
+  statusEl.innerText = "Loading data...";
+
+  // Load all data from admin flow
+  fetch(ADMIN_FLOW_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getAdminData" })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const scores   = Array.isArray(data.scores)   ? data.scores   : (data.scores?.value   || []);
+    const progress = Array.isArray(data.progress) ? data.progress : (data.progress?.value || []);
+
+    renderAdminStats(scores, progress);
+    renderAdminScores(scores);
+    renderAdminProgress(progress);
+    statusEl.innerText = "Last updated: " + new Date().toLocaleTimeString();
+  }).catch(err => {
+    statusEl.innerText = "Error loading data: " + err.message;
+  });
+}
+
+function renderAdminStats(scores, progress) {
+  const total     = scores.length;
+  const avg       = total > 0 ? (scores.reduce((s, r) => s + Number(r.Score || r.score || 0), 0) / total).toFixed(1) : 0;
+  const best      = total > 0 ? Math.max(...scores.map(r => Number(r.Score || r.score || 0))) : 0;
+  const inProgress = progress.filter(p => {
+    const ci = Number(p.CaseIndex || p.field_2 || 0);
+    return ci >= 0;
+  }).length;
+
+  document.getElementById("adminStatTotal").innerText    = total;
+  document.getElementById("adminStatAvg").innerText      = avg;
+  document.getElementById("adminStatBest").innerText     = best;
+  document.getElementById("adminStatProgress").innerText = inProgress;
+}
+
+function renderAdminScores(scores) {
+  const tbody = document.getElementById("adminScoresBody");
+  tbody.innerHTML = "";
+
+  if (scores.length === 0) {
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;color:var(--muted);padding:20px'>No completed participants yet</td></tr>";
+    return;
+  }
+
+  scores.sort((a, b) => Number(b.Score || b.score || 0) - Number(a.Score || a.score || 0));
+
+  scores.forEach((row, i) => {
+    const name  = row.Name  || row.name  || row.Title || row.field_1 || "—";
+    const email = row.Email || row.email || row.field_2 || "—";
+    const score = Number(row.Score || row.score || row.field_3 || 0);
+    const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1 + ".";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-size:16px">${medal}</td>
+      <td style="font-weight:500">${name}</td>
+      <td style="color:var(--muted);font-size:13px">${email}</td>
+      <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--accent)">${score} / 10</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderAdminProgress(progress) {
+  const tbody = document.getElementById("adminProgressBody");
+  tbody.innerHTML = "";
+
+  const active = progress.filter(p => Number(p.CaseIndex || p.field_2 || 0) >= 0);
+
+  if (active.length === 0) {
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;color:var(--muted);padding:20px'>No one currently in progress</td></tr>";
+    return;
+  }
+
+  active.forEach(row => {
+    const name        = row.PlayerName    || row.field_1 || "—";
+    const email       = row.Title         || "—";
+    const caseIdx     = Number(row.CaseIndex     || row.field_2 || 0) + 1;
+    const questionIdx = Number(row.QuestionIndex || row.field_3 || 0) + 1;
+    const score       = Number(row.Score         || row.field_4 || 0);
+    if (Number(row.CaseIndex || row.field_2 || 0) === -1) return; // skip completed
+    const progressPct = Math.round((caseIdx / (cases.length || 5)) * 100);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-weight:500">${name}</td>
+      <td style="color:var(--muted);font-size:13px">${email}</td>
+      <td>
+        <span style="font-size:12px;background:rgba(92,45,126,0.1);color:var(--accent);padding:3px 10px;border-radius:20px;font-weight:600;">
+          Case ${caseIdx} · Q${questionIdx}
+        </span>
+      </td>
+      <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--accent)">${score} pts</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function exportAdminCSV() {
+  // Build data directly from scores array for clean export
+  const headers = ["Rank", "Name", "Email", "Score"];
+  const dataRows = [];
+
+  const tbody = document.getElementById("adminScoresBody");
+  tbody.querySelectorAll("tr").forEach((tr, i) => {
+    const cells = tr.querySelectorAll("td");
+    if (cells.length >= 4) {
+      dataRows.push([
+        String(i + 1),
+        cells[1].innerText.trim(),
+        cells[2].innerText.trim(),
+        cells[3].innerText.trim().replace(" / 10", "")
+      ]);
+    }
+  });
+
+  // Build Excel-compatible CSV with semicolons and UTF-8 BOM
+  const bom = "\uFEFF";
+  const lines = [headers.join(";")];
+  dataRows.forEach(row => {
+    lines.push(row.map(v => `"${v.replace(/"/g, '""')}"`).join(";"));
+  });
+
+  const csv  = bom + lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "radiology_results_" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
