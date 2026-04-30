@@ -1030,6 +1030,74 @@
       .admin-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
       .admin-stat-num { font-size: 22px; }
     }
+
+    /* ===================== SETTINGS ===================== */
+    .settings-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .settings-row label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      min-width: 100px;
+    }
+    .settings-row input[type="datetime-local"] {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: 'DM Sans', sans-serif;
+      color: var(--text);
+      background: var(--bg);
+      outline: none;
+      min-width: 200px;
+    }
+    .settings-row input[type="datetime-local"]:focus {
+      border-color: var(--accent);
+    }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .toggle {
+      position: relative;
+      width: 48px; height: 26px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: var(--border);
+      border-radius: 26px;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+    .toggle-slider:before {
+      content: "";
+      position: absolute;
+      width: 20px; height: 20px;
+      left: 3px; bottom: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+    .toggle input:checked + .toggle-slider { background: var(--accent); }
+    .toggle input:checked + .toggle-slider:before { transform: translateX(22px); }
   </style>
 </head>
 <body>
@@ -1177,6 +1245,37 @@
           </thead>
           <tbody id="adminProgressBody"></tbody>
         </table>
+      </div>
+
+      <!-- Course Settings -->
+      <div class="admin-section" style="margin-bottom:24px;">
+        <div class="admin-section-header">
+          <span>⚙️ Course Settings</span>
+        </div>
+        <div style="padding:20px;">
+          <div class="settings-row">
+            <label>Start Date</label>
+            <input type="datetime-local" id="adminStartDate">
+          </div>
+          <div class="settings-row">
+            <label>End Date</label>
+            <input type="datetime-local" id="adminEndDate">
+          </div>
+          <div class="settings-row">
+            <label>Active</label>
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" id="adminIsActive" checked>
+                <span class="toggle-slider"></span>
+              </label>
+              <span style="font-size:14px;color:var(--text)">Course is open</span>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:8px;">
+            <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+            <span id="adminSettingsMsg" style="font-size:13px;color:var(--accent);"></span>
+          </div>
+        </div>
       </div>
 
       <!-- Completed section -->
