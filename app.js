@@ -2,19 +2,8 @@
 // CASES — loaded from SharePoint at runtime
 // =======================
 
-
-
-const CASES_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/2e49d8eaeb7743d196df2e6d5a03505d/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=6-8RZ3mHEYkyLDOYLPDCmCJ-WMvO97oOBvpUE66YPdE";
-
-// ⬇️ Change this to your access code
-const ACCESS_CODE = "RADIOLOGY2024";
-
-// ⬇️ Change this to your admin password
-const ADMIN_CODE = "ADMIN2024";
-
-const SETTINGS_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/9e18f9e38d014b7189c1e4f91dc819e0/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=5LppNh5CuHS8PMzgcxzDaJ1_-IX3j_el1J_gp21UvzQ";
-
-const ADMIN_FLOW_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/19009f69a506409da4b40fd75005627b/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=E8bv71g2MAEhbYv3LkL1Xl3e0mlG3KY1sKQ1btPwf2E";
+// ⬇️ Your deployed Cloudflare Worker URL — the only URL you need here
+const PROXY_URL = "https://radiology-course-proxy.ramanjit-kaur.workers.dev";
 
 let cases = [];  // populated by loadCasesFromSharePoint()
 
@@ -25,7 +14,7 @@ function loadCasesFromSharePoint() {
   if (loading) loading.classList.add("active");
   if (welcome) welcome.classList.remove("active");
 
-  fetch(CASES_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "getCases" })
@@ -115,11 +104,8 @@ function loadCasesFromSharePoint() {
 // =======================
 // POWER AUTOMATE
 // =======================
-
-const FLOW_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/d50cd79685cc4bc3a7452afdc487e9ae/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=sVNU58FUOCBk2BOTCX8J3VLK5CSkQQyTv1RlX_klbVg";
-const FLOW_POST_URL = FLOW_URL;
-
-const PROGRESS_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/93c3fb02264d47ce932eccfadcef24be/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=SphA_-MMQ3V2UC0kN8_4Mjshe_6QACEfp2dddrwIah0";
+// All Power Automate calls go through PROXY_URL (defined above).
+// No secret URLs are stored in this file.
 
 // =======================
 // SAVE / LOAD PROGRESS
@@ -127,7 +113,7 @@ const PROGRESS_URL = "https://defaultc49fb86316014b5bb7fa930a71704c.39.environme
 
 function saveProgress() {
   if (!playerEmail) return;
-  fetch(PROGRESS_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -148,7 +134,7 @@ function saveProgress() {
 function clearProgress() {
   console.log("clearProgress called, email:", playerEmail);
   if (!playerEmail) { console.warn("No email — skipping clearProgress"); return; }
-  fetch(PROGRESS_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -162,7 +148,7 @@ function clearProgress() {
 }
 
 function loadProgress(email) {
-  return fetch(PROGRESS_URL, {
+  return fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "getProgress", email: email })
@@ -188,8 +174,6 @@ function loadProgress(email) {
     return null;
   });
 }
-
-const FLOW_GET_URL  = FLOW_URL;
 
 document.addEventListener("DOMContentLoaded", () => {
   const display = document.getElementById("courseTimeDisplay");
@@ -439,7 +423,7 @@ function startCourse() {
   const nameInput  = document.getElementById("nameInput").value.trim();
   const emailInput = document.getElementById("emailInput").value.trim();
   const codeEl     = document.getElementById("accessCode");
-  const codeInput  = codeEl ? codeEl.value.trim().toUpperCase() : ACCESS_CODE;
+  const codeInput  = codeEl ? codeEl.value.trim() : "";
 
   let valid = true;
   if (!nameInput) { document.getElementById("nameError").style.display = "block"; valid = false; }
@@ -449,58 +433,83 @@ function startCourse() {
   if (!emailInput || !emailRegex.test(emailInput)) { document.getElementById("emailError").style.display = "block"; valid = false; }
   else document.getElementById("emailError").style.display = "none";
 
-  if (codeInput !== ACCESS_CODE) { document.getElementById("codeError").style.display = "block"; valid = false; }
+  if (!codeInput) { document.getElementById("codeError").style.display = "block"; valid = false; }
   else document.getElementById("codeError").style.display = "none";
 
   if (!valid) return;
 
-  playerName  = nameInput;
-  playerEmail = emailInput;
-
-  if (cases.length === 0) {
-    alert(window.caseLoadFailed
-      ? "Could not load cases from SharePoint. Please check your Power Automate flow and refresh."
-      : "Cases are still loading. Please wait a moment and try again.");
-    return;
-  }
-
-  // Check course schedule
-  const access = checkCourseAccess();
-  if (!access.allowed) {
-    alert(access.message);
-    return;
-  }
-
+  // Validate access code via the proxy (code never compared in browser)
   const loadingEl = document.getElementById("loadingScreen");
   const welcomeEl = document.getElementById("welcome");
   if (loadingEl) loadingEl.classList.add("active");
   if (welcomeEl) welcomeEl.classList.remove("active");
 
-  loadProgress(emailInput).then(saved => {
-    if (loadingEl) loadingEl.classList.remove("active");
-
-    if (saved && saved.answers && saved.answers !== "{}" && saved.caseIndex !== -1) {
-      // Restore saved progress
-      currentCaseIndex     = saved.caseIndex;
-      currentQuestionIndex = saved.questionIndex;
-      score                = saved.score;
-      courseTimeLeft       = saved.timeLeft;
-      try { userAnswers = JSON.parse(saved.answers); } catch(e) { userAnswers = {}; }
-      playerName = saved.name || playerName;
-
-      startCourseTimer();
-      updateProgress();
-      // Go directly to the question they were on
-      showScreen("question");
-      setTimeout(() => loadQuestion(), 50);
-    } else {
-      currentCaseIndex = 0; currentQuestionIndex = 0; score = 0; userAnswers = {};
-
-      startCourseTimer();
-      updateProgress();
-      loadCaseIntro();
-      showScreen("caseIntro");
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "validateAccessCode", code: codeInput })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.valid) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      document.getElementById("codeError").style.display = "block";
+      return;
     }
+    document.getElementById("codeError").style.display = "none";
+
+    playerName  = nameInput;
+    playerEmail = emailInput;
+
+    if (cases.length === 0) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      alert(window.caseLoadFailed
+        ? "Could not load cases from SharePoint. Please check your Power Automate flow and refresh."
+        : "Cases are still loading. Please wait a moment and try again.");
+      return;
+    }
+
+    // Check course schedule
+    const access = checkCourseAccess();
+    if (!access.allowed) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      alert(access.message);
+      return;
+    }
+
+    loadProgress(emailInput).then(saved => {
+      if (loadingEl) loadingEl.classList.remove("active");
+
+      if (saved && saved.answers && saved.answers !== "{}" && saved.caseIndex !== -1) {
+        currentCaseIndex     = saved.caseIndex;
+        currentQuestionIndex = saved.questionIndex;
+        score                = saved.score;
+        courseTimeLeft       = saved.timeLeft;
+        try { userAnswers = JSON.parse(saved.answers); } catch(e) { userAnswers = {}; }
+        playerName = saved.name || playerName;
+
+        startCourseTimer();
+        updateProgress();
+        showScreen("question");
+        setTimeout(() => loadQuestion(), 50);
+      } else {
+        currentCaseIndex = 0; currentQuestionIndex = 0; score = 0; userAnswers = {};
+
+        startCourseTimer();
+        updateProgress();
+        loadCaseIntro();
+        showScreen("caseIntro");
+      }
+    });
+  })
+  .catch(err => {
+    console.error("Access code validation error:", err);
+    if (loadingEl) loadingEl.classList.remove("active");
+    if (welcomeEl) welcomeEl.classList.add("active");
+    alert("Could not verify access code. Please check your connection and try again.");
   });
 }
 
@@ -559,7 +568,7 @@ function goToLeaderboard() {
   const el = document.getElementById("leaderboardMsg");
   el.innerHTML = "<p style='color:var(--muted);font-size:14px;text-align:center;padding:20px'>Loading scores\u2026</p>";
 
-  fetch(FLOW_GET_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "getLeaderboard" })
@@ -788,7 +797,7 @@ function handleNext() {
 
 
 function sendResultToSharePoint() {
-  fetch(FLOW_POST_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1314,13 +1323,26 @@ function goToReview() {
 function openAdmin() {
   const pwd = document.getElementById("adminPassword");
   if (!pwd) return;
-  if (pwd.value.trim().toUpperCase() !== ADMIN_CODE) {
+  const code = pwd.value.trim();
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "validateAdminCode", code })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.valid) {
+      document.getElementById("adminError").style.display = "block";
+      return;
+    }
+    document.getElementById("adminError").style.display = "none";
+    showScreen("admin");
+    loadAdminData();
+  })
+  .catch(() => {
     document.getElementById("adminError").style.display = "block";
-    return;
-  }
-  document.getElementById("adminError").style.display = "none";
-  showScreen("admin");
-  loadAdminData();
+  });
 }
 
 function loadAdminData() {
@@ -1359,7 +1381,7 @@ function loadAdminData() {
   });
 
   // Load all data from admin flow
-  fetch(ADMIN_FLOW_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "getAdminData" })
@@ -1498,7 +1520,7 @@ function exportAdminCSV() {
 let courseSettings = null;
 
 function loadCourseSettings() {
-  return fetch(SETTINGS_URL, {
+  return fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "getSettings" })
@@ -1552,7 +1574,7 @@ function saveSettings() {
     isActive:  isActive
   };
   console.log("Saving settings:", JSON.stringify(saveBody));
-  fetch(SETTINGS_URL, {
+  fetch(PROXY_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(saveBody)
