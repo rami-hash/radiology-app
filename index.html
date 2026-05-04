@@ -1175,6 +1175,7 @@
     .share-btn-whatsapp  { background: #25D366; }
     .share-btn-copy      { background: var(--accent); }
   </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -1315,7 +1316,11 @@
         <div class="admin-section">
           <div class="admin-section-header">
             <span>🏆 Completed Participants</span>
-            <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;" onclick="exportAdminCSV()">↓ Export CSV</button>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+              <input id="adminSearchInput" type="text" placeholder="🔍 Search name or email…" oninput="filterAdminScores()" style="padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;width:200px;outline:none;" />
+              <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;" onclick="exportAdminCSV()">↓ CSV</button>
+              <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;" onclick="exportAdminXLSX()">↓ Excel</button>
+            </div>
           </div>
           <table class="admin-table">
             <thead>
