@@ -175,6 +175,29 @@ function loadProgress(email) {
   });
 }
 
+// =======================
+// DARK / LIGHT MODE
+// =======================
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute("data-theme") === "dark";
+  const newTheme = isDark ? "light" : "dark";
+  html.setAttribute("data-theme", newTheme);
+  document.getElementById("themeToggle").textContent = isDark ? "🌙" : "☀️";
+  localStorage.setItem("theme", newTheme);
+}
+
+// Apply saved theme immediately on load
+(function () {
+  const saved = localStorage.getItem("theme") || "light";
+  if (saved === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = "☀️";
+  }
+})();
+
 document.addEventListener("DOMContentLoaded", () => {
   const display = document.getElementById("courseTimeDisplay");
   if (display) display.innerText = "45:00";
@@ -559,6 +582,16 @@ function goToResults() {
   document.getElementById("finalScore").innerText = finalScore + " / 10";
   document.getElementById("finalName").innerText = playerName;
   document.getElementById("resultMessage").innerText = message;
+
+  // Populate result card
+  const badge = pct >= 90 ? "🏆" : pct >= 75 ? "🥇" : pct >= 60 ? "🥈" : pct >= 40 ? "🥉" : "📋";
+  const rankLabel = pct >= 90 ? "Top Performer" : pct >= 75 ? "High Scorer" : pct >= 60 ? "Good Standing" : "Keep Practising";
+  document.getElementById("rcBadge").textContent   = badge;
+  document.getElementById("rcName").textContent    = playerName;
+  document.getElementById("rcScore").textContent   = finalScore + " / 10";
+  document.getElementById("rcMessage").textContent = message;
+  document.getElementById("rcRank").textContent    = "⭐ " + rankLabel;
+
   showScreen("results");
 }
 
@@ -1674,6 +1707,31 @@ function switchAdminTab(tab) {
 // =======================
 // SHARE RESULTS
 // =======================
+
+function downloadResultCard() {
+  const btn = document.getElementById("downloadCardBtn");
+  const card = document.getElementById("resultCardInner");
+  btn.textContent = "⏳ Generating…";
+  btn.disabled = true;
+
+  html2canvas(card, {
+    scale: 3,
+    useCORS: true,
+    backgroundColor: null,
+    logging: false
+  }).then(canvas => {
+    const link = document.createElement("a");
+    link.download = "radiology-result-" + (playerName || "score").replace(/\s+/g, "-") + ".png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+    btn.textContent = "📸 Download Card";
+    btn.disabled = false;
+  }).catch(() => {
+    btn.textContent = "📸 Download Card";
+    btn.disabled = false;
+    alert("Could not generate image. Try taking a screenshot instead.");
+  });
+}
 
 function getShareText() {
   const score = window.finalScoreOutOf10 || 0;
