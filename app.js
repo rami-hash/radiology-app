@@ -1415,18 +1415,39 @@ function renderAdminStats(scores, progress) {
   document.getElementById("adminStatProgress").innerText = inProgress;
 }
 
+// Global store so filter and export can access raw data
+let adminScoresData = [];
+let adminProgressData = [];
+
 function renderAdminScores(scores) {
+  adminScoresData = scores; // save for filtering & export
+  _renderScoreRows(scores);
+}
+
+function filterAdminScores() {
+  const q = (document.getElementById("adminSearchInput")?.value || "").toLowerCase().trim();
+  const filtered = q
+    ? adminScoresData.filter(row => {
+        const name  = (row.Name  || row.name  || row.Title || row.field_1 || "").toLowerCase();
+        const email = (row.Email || row.email || row.field_2 || "").toLowerCase();
+        return name.includes(q) || email.includes(q);
+      })
+    : adminScoresData;
+  _renderScoreRows(filtered);
+}
+
+function _renderScoreRows(scores) {
   const tbody = document.getElementById("adminScoresBody");
   tbody.innerHTML = "";
 
   if (scores.length === 0) {
-    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;color:var(--muted);padding:20px'>No completed participants yet</td></tr>";
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;color:var(--muted);padding:20px'>No results found</td></tr>";
     return;
   }
 
-  scores.sort((a, b) => Number(b.Score || b.score || 0) - Number(a.Score || a.score || 0));
+  const sorted = [...scores].sort((a, b) => Number(b.Score || b.score || 0) - Number(a.Score || a.score || 0));
 
-  scores.forEach((row, i) => {
+  sorted.forEach((row, i) => {
     const name  = row.Name  || row.name  || row.Title || row.field_1 || "—";
     const email = row.Email || row.email || row.field_2 || "—";
     const score = Number(row.Score || row.score || row.field_3 || 0);
@@ -1443,6 +1464,7 @@ function renderAdminScores(scores) {
 }
 
 function renderAdminProgress(progress) {
+  adminProgressData = progress;
   const tbody = document.getElementById("adminProgressBody");
   tbody.innerHTML = "";
 
@@ -1511,6 +1533,48 @@ function exportAdminCSV() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function exportAdminXLSX() {
+  if (!adminScoresData.length) { alert("No data to export."); return; }
+
+  const sorted = [...adminScoresData].sort((a, b) => Number(b.Score || b.score || 0) - Number(a.Score || a.score || 0));
+
+  // Build worksheet rows
+  const wsData = [["Rank", "Name", "Email", "Score", "Score / 10"]];
+  sorted.forEach((row, i) => {
+    const name  = row.Name  || row.name  || row.Title || row.field_1 || "—";
+    const email = row.Email || row.email || row.field_2 || "—";
+    const score = Number(row.Score || row.score || row.field_3 || 0);
+    wsData.push([i + 1, name, email, score, score + " / 10"]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Column widths
+  ws["!cols"] = [{ wch: 6 }, { wch: 30 }, { wch: 35 }, { wch: 10 }, { wch: 12 }];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Results");
+
+  // Add a progress sheet too if data exists
+  if (typeof adminProgressData !== "undefined" && adminProgressData.length) {
+    const wsP = [["Name", "Email", "Case", "Question", "Score"]];
+    adminProgressData.forEach(row => {
+      const name  = row.PlayerName || row.field_1 || "—";
+      const email = row.Title      || "—";
+      const ci    = Number(row.CaseIndex     || row.field_2 || 0) + 1;
+      const qi    = Number(row.QuestionIndex || row.field_3 || 0) + 1;
+      const score = Number(row.Score         || row.field_4 || 0);
+      if (Number(row.CaseIndex || row.field_2 || 0) === -1) return;
+      wsP.push([name, email, ci, qi, score]);
+    });
+    const wsProgress = XLSX.utils.aoa_to_sheet(wsP);
+    wsProgress["!cols"] = [{ wch: 30 }, { wch: 35 }, { wch: 8 }, { wch: 10 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsProgress, "In Progress");
+  }
+
+  XLSX.writeFile(wb, "radiology_results_" + new Date().toISOString().slice(0, 10) + ".xlsx");
 }
 
 // =======================
