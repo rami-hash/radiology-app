@@ -1,0 +1,15 @@
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+
+# Environment / secrets — NEVER commit these
+.env
+.env.local
+.env.*
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,21 @@
+name = "radiology-course-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# ── Secrets (set via CLI, never stored here) ───────────────────────────────────
+# Run these commands once after deploying:
+#
+#   wrangler secret put ACCESS_CODE
+#   wrangler secret put ADMIN_CODE
+#   wrangler secret put CASES_URL
+#   wrangler secret put SETTINGS_URL
+#   wrangler secret put ADMIN_FLOW_URL
+#   wrangler secret put FLOW_URL
+#   wrangler secret put PROGRESS_URL
+#
+# Each command will prompt you to paste the value — it is encrypted at rest
+# and never visible in your code or dashboard.
+
+# ── Optional: restrict to your domain ─────────────────────────────────────────
+# [triggers]
+# routes = [{ pattern = "proxy.myebr.org/*", zone_name = "myebr.org" }]
