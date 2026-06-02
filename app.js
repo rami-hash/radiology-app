@@ -1,0 +1,5032 @@
+// =======================
+// CASES — loaded from Cloudflare KV via Worker
+// =======================
+
+const PROXY_URL = "https://radiology-course-proxy.ramanjit-kaur.workers.dev";
+
+let cases = [];
+
+// Keep old name so nothing else breaks
+function loadCasesFromSharePoint() { loadCases(); }
+
+function loadCases() {
+  const loading = document.getElementById("loadingScreen");
+  const welcome = document.getElementById("welcome");
+  if (loading) loading.classList.add("active");
+  if (welcome) welcome.classList.remove("active");
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getQuestions" })
+  })
+  .then(res => {
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  })
+  .then(data => {
+    const raw = Array.isArray(data) ? data : [];
+    cases = raw
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map(c => ({
+        id:        c.id        || "",
+        order:     c.order     || 0,
+        intro:     c.intro     || c.title  || "",
+        content:   c.content   || "",
+        imageType: (c.imageType || "none").toLowerCase(),
+        imageUrl:  c.imageUrl  || "",
+        questions: (c.questions || [])
+          .sort((a, b) => (a.order || 0) - (b.order || 0))
+          .map(q => ({
+            id:            q.id            || "",
+            order:         q.order         || 0,
+            text:          q.text          || "",
+            content:       q.content       || "",
+            questionType:  q.questionType  || "mc",
+            suggestions:   q.suggestions   || "",
+            fieldLabels:   q.fieldLabels   || "",
+            imageType:     (q.imageType    || "none").toLowerCase(),
+            imageUrl:      q.imageUrl      || "",
+            options:       (q.options      || []).filter(o => o.label),
+            correctAnswer:    q.correctAnswer    || "",
+            explanation:      q.explanation      || "",
+            allowMultiSelect: q.allowMultiSelect !== undefined ? q.allowMultiSelect : null,
+            subQuestions:     q.subQuestions     || []
+          }))
+      }));
+
+    if (cases.length === 0) {
+      if (loading) loading.classList.remove("active");
+      if (welcome) welcome.classList.add("active");
+      alert("No cases found. Please add cases via the Admin → Content panel.");
+      return;
+    }
+
+    if (loading) loading.classList.remove("active");
+    if (welcome) welcome.classList.add("active");
+    console.log("Loaded", cases.length, "cases from KV");
+  })
+  .catch(err => {
+    console.error("Failed to load cases:", err);
+    if (loading) loading.classList.remove("active");
+    if (welcome) welcome.classList.add("active");
+    const el = document.getElementById("loadingError");
+    if (el) el.style.display = "block";
+    window.caseLoadFailed = true;
+  });
+}
+
+// Load cases as soon as page is ready
+// =======================
+// POWER AUTOMATE
+// =======================
+// All calls go through PROXY_URL above.
+
+// =======================
+// SAVE / LOAD PROGRESS
+// =======================
+
+function saveProgress() {
+  if (!playerEmail) return;
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action:        "saveProgress",
+      email:         playerEmail,
+      name:          playerName,
+      caseIndex:     currentCaseIndex,
+      questionIndex: currentQuestionIndex,
+      score:         score,
+      answers:       JSON.stringify(userAnswers),
+      timeLeft:      courseTimeLeft
+    })
+  })
+  .then(res => console.log("Progress saved, status:", res.status, "case:", currentCaseIndex, "q:", currentQuestionIndex, "score:", score))
+  .catch(err => console.error("Progress save error:", err));
+}
+
+function clearProgress() {
+  console.log("clearProgress called, email:", playerEmail);
+  if (!playerEmail) { console.warn("No email — skipping clearProgress"); return; }
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "clearProgress",
+      email:  playerEmail
+    })
+  })
+  .then(res => { console.log("Progress cleared, status:", res.status); return res.text(); })
+  .then(txt => console.log("Clear response:", txt))
+  .catch(err => console.error("Progress clear error:", err));
+}
+
+function loadProgress(email) {
+  return fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getProgress", email: email })
+  })
+  .then(res => res.json())
+  .then(data => {
+    console.log("Progress raw data:", JSON.stringify(data).slice(0, 500));
+    const rows = Array.isArray(data) ? data : (data.value || []);
+    if (rows.length === 0) { console.log("No progress found"); return null; }
+    const row = rows[0];
+    console.log("Progress row:", JSON.stringify(row).slice(0, 300));
+    return {
+      name:          row.PlayerName   || row.field_1     || "",
+      caseIndex:     row.CaseIndex    !== undefined ? Number(row.CaseIndex)    : (row.field_2 !== undefined ? Number(row.field_2) : 0),
+      questionIndex: row.QuestionIndex !== undefined ? Number(row.QuestionIndex) : (row.field_3 !== undefined ? Number(row.field_3) : 0),
+      score:         row.Score        !== undefined ? Number(row.Score)        : (row.field_4 !== undefined ? Number(row.field_4) : 0),
+      answers:       row.Answers      || row.field_5      || "{}",
+      timeLeft:      row.TimeLeft     !== undefined ? Number(row.TimeLeft)     : (row.field_6 !== undefined ? Number(row.field_6) : 2700)
+    };
+  })
+  .catch(err => {
+    console.error("Progress load error:", err);
+    return null;
+  });
+}
+
+// =======================
+// DARK / LIGHT MODE
+// =======================
+function toggleTheme() {
+  const html = document.documentElement;
+  const isDark = html.getAttribute("data-theme") === "dark";
+  const newTheme = isDark ? "light" : "dark";
+  html.setAttribute("data-theme", newTheme);
+  document.getElementById("themeToggle").textContent = isDark ? "🌙" : "☀️";
+  localStorage.setItem("theme", newTheme);
+}
+(function () {
+  const saved = localStorage.getItem("theme") || "light";
+  if (saved === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    const btn = document.getElementById("themeToggle");
+    if (btn) btn.textContent = "☀️";
+  }
+})();
+
+// =======================
+// CASE GALLERY
+// =======================
+function buildGallery() {
+  const grid = document.getElementById("galleryGrid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  const icons = ["🫁","🧠","🦴","🫀","🦷","🔬","💊","🩻"];
+  cases.forEach((c, i) => {
+    const icon = icons[i % icons.length];
+    const qCount = c.questions ? c.questions.length : "?";
+    const card = document.createElement("div");
+    card.className = "gallery-card";
+    card.innerHTML = `
+      <div class="gallery-card-thumb">
+        <span class="gallery-card-num">Case ${i + 1}</span>
+        ${icon}
+      </div>
+      <div class="gallery-card-body">
+        <div class="gallery-card-title">${c.title || c.intro || "Case " + (i + 1)}</div>
+        <div class="gallery-card-meta"><span>📋 ${qCount} question${qCount !== 1 ? "s" : ""}</span></div>
+      </div>`;
+    grid.appendChild(card);
+  });
+}
+
+function startFromGallery() {
+  currentCaseIndex = 0; currentQuestionIndex = 0; score = 0; userAnswers = {};
+  startCourseTimer();
+  updateProgress();
+  loadCaseIntro();
+  showScreen("caseIntro");
+}
+
+// =======================
+// TIME TRACKING
+// =======================
+let questionStartTime = null;
+let questionTimings = {};
+function startQuestionTimer() { questionStartTime = Date.now(); }
+function recordQuestionTime() {
+  if (!questionStartTime) return;
+  const elapsed = Math.round((Date.now() - questionStartTime) / 1000);
+  const key = currentCaseIndex + "_" + questionPath.join("_");
+  if (!questionTimings[key]) questionTimings[key] = [];
+  questionTimings[key].push(elapsed);
+  questionStartTime = null;
+}
+
+function renderTimeAnalytics() {
+  const timingBody  = document.getElementById("adminTimingBody");
+  const slowestBody = document.getElementById("adminSlowestBody");
+  if (!timingBody || !slowestBody) return;
+
+  if (Object.keys(questionTimings).length === 0) {
+    timingBody.innerHTML  = "<p style='color:var(--muted);text-align:center;padding:40px;'>No timing data yet — data is recorded as candidates answer questions during the session.</p>";
+    slowestBody.innerHTML = timingBody.innerHTML;
+    return;
+  }
+
+  // Build rows with average time per question
+  const rows = Object.entries(questionTimings).map(([key, times]) => {
+    const avg    = Math.round(times.reduce((a,b) => a+b, 0) / times.length);
+    const parts  = key.split("_");
+    const cIdx   = parseInt(parts[0]);
+    const qPath  = parts.slice(1).map(Number);
+    const c      = cases[cIdx];
+    let   q      = c ? c.questions[qPath[0]] : null;
+    for (let i = 1; q && i < qPath.length; i++) q = (q.subQuestions || [])[qPath[i]];
+    const caseLabel = c ? (c.intro || "Case " + (cIdx+1)) : "Case " + (cIdx+1);
+    const qNum      = qPath.map(i => i+1).join(".");
+    const qText     = q ? (q.text || "Question " + qNum) : "Question " + qNum;
+    return { key, caseLabel, qNum, qText, avg, count: times.length };
+  });
+
+  // Sort by question order for the main table
+  const sorted = [...rows].sort((a,b) => a.key.localeCompare(b.key));
+
+  timingBody.innerHTML = sorted.map(r => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:60px;">Q${r.qNum}</div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(r.qText.slice(0,60))}${r.qText.length>60?"…":""}</div>
+        <div style="font-size:11px;color:var(--muted);">${escapeHtml(r.caseLabel.slice(0,50))} · ${r.count} attempt${r.count!==1?"s":""}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:16px;font-weight:700;color:${r.avg>60?"var(--danger)":r.avg>30?"#e67e22":"var(--accent)"};">${r.avg}s</div>
+        <div style="font-size:11px;color:var(--muted);">avg</div>
+      </div>
+    </div>`).join("");
+
+  // Slowest 5
+  const slowest = [...rows].sort((a,b) => b.avg - a.avg).slice(0, 5);
+  slowestBody.innerHTML = slowest.map((r, i) => `
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="font-size:18px;min-width:28px;">
+        ${i===0?"🥇":i===1?"🥈":i===2?"🥉":"🐢"}
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:500;color:var(--text);">${escapeHtml(r.qText.slice(0,60))}${r.qText.length>60?"…":""}</div>
+        <div style="font-size:11px;color:var(--muted);">Q${r.qNum} · ${escapeHtml(r.caseLabel.slice(0,40))}</div>
+      </div>
+      <div style="font-size:16px;font-weight:700;color:var(--danger);">${r.avg}s</div>
+    </div>`).join("");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const display = document.getElementById("courseTimeDisplay");
+  if (display) display.innerText = "45:00";
+  loadCasesFromSharePoint();
+  loadCourseSettings();
+});
+
+// =======================
+// VARIABLES GLOBALES
+// =======================
+
+let score = 0;
+let playerName = "";
+let playerEmail = "";
+
+let currentCaseIndex    = 0;
+let currentQuestionIndex = 0; // kept for compatibility — mirrors questionPath[0]
+
+// Question path — array of indices navigating the sub-question tree
+// e.g. [2] = top-level question 2
+//      [2, 0] = sub-question 0 of question 2
+//      [2, 0, 1] = sub-sub-question 1 of sub-question 0 of question 2
+let questionPath = [0];
+
+// Get the question object at the current path
+function getCurrentQuestion() {
+  const c = cases[currentCaseIndex];
+  let q = c.questions[questionPath[0]];
+  for (let i = 1; i < questionPath.length; i++) {
+    q = (q.subQuestions || [])[questionPath[i]];
+  }
+  return q;
+}
+
+// Get the parent question (for image inheritance)
+function getParentQuestion() {
+  if (questionPath.length <= 1) return null;
+  const c = cases[currentCaseIndex];
+  let q = c.questions[questionPath[0]];
+  for (let i = 1; i < questionPath.length - 1; i++) {
+    q = (q.subQuestions || [])[questionPath[i]];
+  }
+  return q;
+}
+
+// Count all questions recursively in a case (including sub-questions)
+function countQuestionsRecursive(questions) {
+  return (questions || []).reduce((sum, q) => {
+    return sum + 1 + countQuestionsRecursive(q.subQuestions);
+  }, 0);
+}
+
+// Flat ordered list of all question paths in a case (for progress/scoring)
+function getAllPaths(questions, prefix) {
+  prefix = prefix || [];
+  let paths = [];
+  (questions || []).forEach((q, i) => {
+    const path = prefix.concat(i);
+    paths.push(path);
+    paths = paths.concat(getAllPaths(q.subQuestions, path));
+  });
+  return paths;
+}
+
+// Get the next path after current, or null if done
+function getNextPath() {
+  const c = cases[currentCaseIndex];
+  const allPaths = getAllPaths(c.questions);
+  const currentKey = questionPath.join(",");
+  const idx = allPaths.findIndex(p => p.join(",") === currentKey);
+  if (idx < 0 || idx >= allPaths.length - 1) return null;
+  return allPaths[idx + 1];
+}
+
+// Unique key for storing answers — path-based
+function answerKey() {
+  return currentCaseIndex + "_" + questionPath.join("_");
+}
+
+// Store user answers for review mode
+let userAnswers = {};
+
+// Calculate total questions across all cases for scoring
+function totalQuestions() {
+  return cases.reduce((sum, c) => sum + countQuestionsRecursive(c.questions), 0);
+}
+
+// Tiempo TOTAL del curso (45 min)
+let courseTimeLeft = 45 * 60;
+let courseTimer = null;
+
+// Tiempo POR CASO (not used but kept for compatibility)
+let timeLeft = 90;
+let timerInterval = null;
+
+
+// =======================
+// NAVEGACIÓN Y CASOS
+// =======================
+
+function showScreen(screenId) {
+  document.querySelectorAll(".screen").forEach(screen => {
+    screen.classList.remove("active");
+  });
+  document.getElementById(screenId).classList.add("active");
+
+  // Show Dr. Ray only during course, not on welcome/admin/login
+  const tutorScreens = ["caseIntro","question","feedback","results","review","leaderboard"];
+  const tutorBubble = document.getElementById("tutorBubble");
+  if (tutorBubble) tutorBubble.style.display = tutorScreens.includes(screenId) ? "block" : "none";
+  const tutorPanel = document.getElementById("tutorPanel");
+  if (tutorPanel) tutorPanel.classList.remove("open");
+  tutorOpen = false;
+
+  updateTopBar();
+}
+
+function updateProgress() {
+  // Count completed cases (not questions) for progress bar
+  const total = cases.length;
+  const completed = currentCaseIndex;
+  const pct = (completed / total) * 100;
+  document.getElementById("progressFill").style.width = pct + "%";
+  document.getElementById("progressLabel").innerText = completed + " / " + total + " cases completed";
+}
+
+let caseIntroImageUrl = "";
+
+function loadCaseIntro() {
+  const c = cases[currentCaseIndex];
+  document.getElementById("caseNumber").innerText = "Case " + (currentCaseIndex + 1) + " of " + cases.length;
+  document.getElementById("caseIntroText").innerText = c.intro;
+
+  // Show optional case content
+  const caseContentEl = document.getElementById("caseContent");
+  if (caseContentEl) {
+    if (c.content && c.content.trim()) {
+      caseContentEl.innerText = c.content.trim();
+      caseContentEl.style.display = "block";
+    } else {
+      caseContentEl.style.display = "none";
+    }
+  }
+
+  // Hide both image sections first
+  const dicomEl = document.getElementById("caseIntroDicom");
+  const imageEl = document.getElementById("caseIntroImage");
+  if (dicomEl) dicomEl.style.display = "none";
+  if (imageEl) imageEl.style.display = "none";
+  caseIntroImageUrl = c.imageUrl || "";
+
+  const itype = (c.imageType || "none").toLowerCase();
+
+  if (itype === "dicom" && c.imageUrl) {
+    if (dicomEl) dicomEl.style.display = "block";
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+      const hint = document.getElementById("caseIntroMobileHint");
+      if (hint) hint.style.display = "block";
+    }
+    dicomLoadCaseIntroFrame(c.imageUrl);
+
+  } else if (itype === "image" && c.imageUrl) {
+    if (imageEl) imageEl.style.display = "block";
+    const img     = document.getElementById("caseIntroImg");
+    const errDiv  = document.getElementById("caseIntroImgError");
+    const errLink = document.getElementById("caseIntroImgLink");
+    if (img) {
+      img.style.display = "none";
+      img.onload  = () => { img.style.display = "block"; if (errDiv) errDiv.style.display = "none"; };
+      img.onerror = () => { img.style.display = "none";  if (errDiv) errDiv.style.display = "block"; if (errLink) errLink.href = c.imageUrl; };
+      img.src = c.imageUrl;
+    }
+  }
+}
+
+let caseIntroFsParent = null;
+let caseIntroFsNext   = null;
+
+function caseIntroDicomFullscreen() {
+  const section = document.getElementById("caseIntroDicom");
+  const btn     = document.getElementById("caseIntroDicomFullscreenBtn");
+  if (!section) return;
+
+  const isFs = !section.classList.contains("dicom-fullscreen");
+
+  if (isFs) {
+    caseIntroFsParent = section.parentNode;
+    caseIntroFsNext   = section.nextSibling;
+    document.body.appendChild(section);
+    section.classList.add("dicom-fullscreen");
+    document.body.style.overflow = "hidden";
+
+    if (btn) { btn.innerText = "✕ Exit"; btn.style.background = "rgba(192,57,43,0.9)"; btn.style.color = "#fff"; btn.style.borderColor = "transparent"; }
+
+    let exitOverlay = document.getElementById("caseIntroExitOverlay");
+    if (!exitOverlay) {
+      exitOverlay = document.createElement("button");
+      exitOverlay.id = "caseIntroExitOverlay";
+      exitOverlay.innerText = "✕ Exit Fullscreen";
+      exitOverlay.style.cssText = "position:fixed;top:12px;right:12px;z-index:9999;background:rgba(0,0,0,0.75);color:#fff;border:2px solid rgba(255,255,255,0.35);border-radius:10px;padding:10px 20px;font-size:14px;font-family:'DM Sans',sans-serif;font-weight:700;cursor:pointer;";
+      exitOverlay.onclick = caseIntroDicomFullscreen;
+      document.body.appendChild(exitOverlay);
+    }
+    exitOverlay.style.display = "block";
+
+  } else {
+    section.classList.remove("dicom-fullscreen");
+    if (caseIntroFsParent) caseIntroFsParent.insertBefore(section, caseIntroFsNext);
+    document.body.style.overflow = "";
+    if (btn) { btn.innerText = "⛶ Fullscreen"; btn.style.background = ""; btn.style.color = ""; btn.style.borderColor = ""; }
+    const exitOverlay = document.getElementById("caseIntroExitOverlay");
+    if (exitOverlay) exitOverlay.style.display = "none";
+  }
+}
+
+function loadQuestion() {
+  const c = cases[currentCaseIndex];
+  const q = getCurrentQuestion();
+  const allPaths = getAllPaths(c.questions);
+  const totalQ   = allPaths.length;
+
+  // Build hierarchical question number e.g. "1", "1.1", "1.2", "2", "2.1.1"
+  const hierarchicalNum = questionPath.map((idx, depth) => {
+    if (depth === 0) return idx + 1; // top-level: 1-based
+    return idx + 1;
+  }).join(".");
+
+  // Count only top-level questions for the denominator
+  const totalTopLevel = c.questions.length;
+  const sectionIdx = questionPath[0]; // 0-based top-level index
+
+  // ── Update new PACS section header UI ──
+  const crumbCase = document.getElementById("sectionCrumbCase");
+  const crumbSection = document.getElementById("sectionCrumbSection");
+  const crumbPts = document.getElementById("sectionCrumbPts");
+  const sectionNumLabel = document.getElementById("sectionNumLabel");
+  const sectionTitleText = document.getElementById("sectionTitleText");
+
+  if (crumbCase) crumbCase.textContent = "CASE " + (currentCaseIndex + 1) + " / " + cases.length;
+  if (crumbSection) crumbSection.textContent = "SECTION " + hierarchicalNum + (questionPath.length === 1 ? " / " + totalTopLevel : "");
+  if (crumbPts) crumbPts.textContent = (q.points || 10) + " pts";
+  if (sectionNumLabel) sectionNumLabel.textContent = "SECTION " + (sectionIdx + 1) + " OF " + totalTopLevel;
+  if (sectionTitleText) sectionTitleText.textContent = q.text || ("Section " + (sectionIdx + 1));
+
+  // ── Section dots ──
+  const dotsContainer = document.getElementById("sectionDots");
+  if (dotsContainer) {
+    dotsContainer.innerHTML = "";
+    for (let i = 0; i < totalTopLevel; i++) {
+      const dot = document.createElement("div");
+      dot.className = "section-dot " + (i < sectionIdx ? "dot-done" : i === sectionIdx ? "dot-active" : "dot-future");
+      dot.title = "Section " + (i + 1);
+      (function(idx){ dot.onclick = function(){ /* preview only */ }; })(i);
+      dotsContainer.appendChild(dot);
+    }
+  }
+
+  // ── Navigation labels ──
+  const navCenter = document.getElementById("sectionNavCenter");
+  if (navCenter) navCenter.textContent = (sectionIdx + 1) + " / " + totalTopLevel;
+  const backBtn = document.getElementById("sectionBackBtn");
+  const nextBtn = document.getElementById("sectionNextBtn");
+  if (backBtn) backBtn.disabled = (sectionIdx === 0 && questionPath.length === 1);
+  if (nextBtn) {
+    const isLast = sectionIdx >= totalTopLevel - 1 && questionPath.length === 1;
+    nextBtn.textContent = isLast ? "Submit Case →" : "Next section →";
+  }
+
+  // ── Legacy question number (hidden but kept for compat) ──
+  const qNumEl = document.getElementById("questionNumber");
+  if (qNumEl) qNumEl.innerText =
+    "Case " + (currentCaseIndex + 1) + " / " + cases.length +
+    "  ·  Question " + hierarchicalNum + (questionPath.length === 1 ? " / " + totalTopLevel : "");
+
+  // Clinical context — only show if content was written in admin panel
+  const clinicalBlock = document.getElementById("clinicalNoteCompact");
+  const caseTxtEl = document.getElementById("questionCaseText");
+  const contentEl = document.getElementById("questionContent");
+
+  const hasContent = (c.content && c.content.trim()) || (q.content && q.content.trim());
+
+  if (hasContent) {
+    if (clinicalBlock) clinicalBlock.style.display = "";
+    if (caseTxtEl) caseTxtEl.innerText = c.content ? c.content.trim() : "";
+    if (contentEl) {
+      if (q.content && q.content.trim()) {
+        contentEl.innerText = q.content.trim();
+        contentEl.style.display = "block";
+      } else {
+        contentEl.style.display = "none";
+      }
+    }
+  } else {
+    if (clinicalBlock) clinicalBlock.style.display = "none";
+  }
+
+  currentQuestionIndex = questionPath[0]; // keep compat
+  window.mcSelectedCorrect = 0;
+  startQuestionTimer();
+
+  updateTutorContext({
+    caseTitle:     c.intro || c.title || "",
+    caseContent:   c.content || "",
+    questionText:  q.text || "",
+    options:       (q.options || []).map(o => o.code + ": " + o.label).join(", "),
+    correctAnswer: q.correctAnswer || "",
+    explanation:   q.explanation || "",
+    userAnswer:    ""
+  });
+
+  // Sub-question depth badge
+  let depthBadge = document.getElementById("subQuestionBadge");
+  if (questionPath.length > 1) {
+    if (!depthBadge) {
+      depthBadge = document.createElement("div");
+      depthBadge.id = "subQuestionBadge";
+      depthBadge.style.cssText = "display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;background:rgba(92,45,126,0.1);color:var(--accent);border:1px solid var(--accent);margin-bottom:10px;font-family:'JetBrains Mono',monospace;";
+      const qHeader = document.getElementById("questionCaseText");
+      qHeader.parentNode.insertBefore(depthBadge, qHeader);
+    }
+    depthBadge.innerText = "↳ " + hierarchicalNum;
+    depthBadge.style.display = "inline-block";
+  } else {
+    if (depthBadge) depthBadge.style.display = "none";
+  }
+
+  // Image: use own imageType/imageUrl, or inherit from parent if imageType is "none"
+  const dicomSection = document.getElementById("dicomSection");
+  const imageSection = document.getElementById("imageSection");
+  const noImagingMsg = document.getElementById("noImagingMsg");
+  dicomSection.style.display = "none";
+  imageSection.style.display = "none";
+  if (noImagingMsg) noImagingMsg.style.display = "none";
+
+  // Resolve which image to show — walk up the tree until we find one
+  let imageQ = q;
+  if ((!imageQ.imageType || imageQ.imageType === "none") && questionPath.length > 1) {
+    let parent = getParentQuestion();
+    while (parent) {
+      if (parent.imageType && parent.imageType !== "none" && parent.imageUrl) {
+        imageQ = parent;
+        break;
+      }
+      parent = null; // only go up one level for now — extend if needed
+    }
+  }
+
+  if (imageQ.imageType === "dicom" && imageQ.imageUrl) {
+    dicomSection.style.display = "block";
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+      const oldFrame = document.getElementById("dicomFrame");
+      if (oldFrame) oldFrame.remove();
+      const oldBtn = document.getElementById("dicomMobileOpenBtn");
+      if (oldBtn) oldBtn.remove();
+      const mobileBtn = document.createElement("div");
+      mobileBtn.id = "dicomMobileOpenBtn";
+      mobileBtn.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;height:200px;background:#000;border-radius:12px;border:1px solid var(--border);gap:16px;";
+      mobileBtn.innerHTML = `
+        <div style="font-size:28px;">🖥️</div>
+        <div style="color:#fff;font-size:15px;font-weight:600;text-align:center;padding:0 24px;">Best viewed on desktop</div>
+        <div style="color:rgba(255,255,255,0.55);font-size:13px;text-align:center;padding:0 24px;line-height:1.5;">For the best experience with DICOM viewers, please use a desktop browser.</div>
+        <button onclick="window.open('${imageQ.imageUrl}', '_blank')" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:10px;padding:11px 22px;font-size:13px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;">Open viewer →</button>`;
+      dicomSection.appendChild(mobileBtn);
+    } else {
+      const oldMobileBtn = document.getElementById("dicomMobileOpenBtn");
+      if (oldMobileBtn) oldMobileBtn.remove();
+      dicomLoadFrame(imageQ.imageUrl);
+    }
+  } else if (imageQ.imageType === "image" && imageQ.imageUrl) {
+    imageSection.style.display = "block";
+    const img     = document.getElementById("caseImage");
+    const errMsg  = document.getElementById("imageErrorMsg");
+    const openBtn = document.getElementById("imageOpenBtn");
+    const openLnk = document.getElementById("imageOpenLink");
+    img.style.display = "none";
+    img.src = "";
+    if (errMsg)  errMsg.style.display  = "none";
+    if (openBtn) openBtn.style.display = "none";
+    if (openLnk) openLnk.href = imageQ.imageUrl;
+    img.onload  = () => { img.style.display = "block"; if (errMsg) errMsg.style.display = "none"; if (openBtn) openBtn.style.display = "none"; };
+    img.onerror = () => {
+      img.style.display = "none";
+      if (errMsg) { errMsg.innerHTML = "🖼️ The image could not load automatically.<br><span style='font-size:12px;'>Click the button below to open it.</span>"; errMsg.style.display = "block"; }
+      if (openBtn) openBtn.style.display = "block";
+    };
+    img.src = imageQ.imageUrl;
+  } else {
+    if (noImagingMsg) noImagingMsg.style.display = "block";
+  }
+
+  // Answer UI
+  const freetextContainer = document.getElementById("freetextContainer");
+  const optionsContainer  = document.getElementById("optionsContainer");
+  const questionType = (q.questionType || "mc").toLowerCase();
+  const isFreetext   = questionType === "freetext" || questionType === "free";
+
+  if (isFreetext) {
+    freetextContainer.style.display = "block";
+    optionsContainer.style.display  = "none";
+    const chipContainer = document.getElementById("chipSelectContainer");
+    if (chipContainer) chipContainer.style.display = "none";
+    if (document.getElementById("multiHint"))   document.getElementById("multiHint").style.display = "none";
+    if (document.getElementById("submitMcBtn")) document.getElementById("submitMcBtn").style.display = "none";
+    const submitBtn = document.getElementById("freetextSubmit");
+    const hint      = document.getElementById("freetextHint");
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.style.display = "block"; }
+    if (hint)      { hint.innerText = ""; }
+    // Lock Next until freetext submitted
+    const nextBtn = document.getElementById("sectionNextBtn");
+    if (nextBtn) { nextBtn.disabled = true; nextBtn.classList.add("locked-until-answer"); }
+
+    let suggestionList = (q.options || []).map(o => o.label);
+    let cascadingData  = null; // { label, sub[] }[] — for cascading mode
+
+    if (q.suggestions && q.suggestions.trim()) {
+      const raw = q.suggestions.trim();
+      // Try to parse as JSON cascading format first
+      if (raw.startsWith("[")) {
+        try {
+          cascadingData = JSON.parse(raw);
+          suggestionList = cascadingData.map(s => s.label || s);
+        } catch(e) { cascadingData = null; }
+      }
+      // Fall back to plain comma/semicolon/newline separated
+      if (!cascadingData) {
+        if (raw.includes(","))       suggestionList = raw.split(",").map(s => s.trim()).filter(s => s);
+        else if (raw.includes(";"))  suggestionList = raw.split(";").map(s => s.trim()).filter(s => s);
+        else if (raw.includes("\n")) suggestionList = raw.split("\n").map(s => s.trim()).filter(s => s);
+        else                         suggestionList = [raw];
+      }
+    }
+
+    const correctAnswers = q.correctAnswer.split(",").map(a => {
+      const trimmed = a.trim();
+      const opt = (q.options || []).find(o => o.code.toUpperCase() === trimmed.toUpperCase());
+      return opt ? opt.label : trimmed;
+    });
+
+    window.freetextCorrectAnswers = correctAnswers;
+    window.selectedAutocomplete   = null;
+    fieldSuggestions = {};
+    ftAllowMulti = q.allowMultiSelect === true;
+    ftCascadingData = cascadingData; // store for use in buildFreetextFields
+    buildFreetextFields(correctAnswers.length, suggestionList);
+
+  } else {
+    freetextContainer.style.display = "none";
+    document.getElementById("freetextSubmit") && (document.getElementById("freetextSubmit").style.display = "none");
+    optionsContainer.style.display  = "none";
+    optionsContainer.innerHTML = "";
+
+    const isMulti   = q.allowMultiSelect === true;
+    const multiHint = document.getElementById("multiHint");
+    const submitBtn = document.getElementById("submitMcBtn");
+
+    buildChipSelect(q.options || [], isMulti);
+    if (multiHint)   multiHint.style.display  = isMulti ? "block" : "none";
+    if (submitBtn) { submitBtn.style.display = isMulti ? "block" : "none"; submitBtn.disabled = false; }
+  }
+}
+
+// =======================
+// FILTER & CHIPS UI
+// =======================
+
+function buildChipSelect(options, isMulti) {
+  window.selectedCodes  = [];
+  window.chipOptions    = options;
+  window.chipIsMulti    = isMulti;
+
+  const container   = document.getElementById("chipSelectContainer");
+  const filterInput = document.getElementById("chipFilterInput");
+  const list        = document.getElementById("chipOptionList");
+  const selectedItems = document.getElementById("chipSelectedItems");
+
+  container.style.display = "block";
+  filterInput.value = "";
+  filterInput.disabled = false;
+  // Clear only chip tags, preserve the input element
+  Array.from(selectedItems.querySelectorAll(".chip-tag")).forEach(el => el.remove());
+  updateChipCount();
+  list.innerHTML = "";
+
+  options.forEach(opt => {
+    const item = document.createElement("div");
+    item.className = "chip-option-item";
+    item.dataset.code = opt.code;
+    item.innerHTML =
+      '<span class="chip-code">' + opt.code + '</span>' +
+      '<span class="chip-option-label">' + escapeHtml(opt.label) + '</span>' +
+      '<span class="chip-check">✓</span>';
+    item.onclick = () => chipToggle(opt.code, opt.label);
+    list.appendChild(item);
+  });
+
+  // Lock Next button until answered
+  const nextBtn = document.getElementById("sectionNextBtn");
+  if (nextBtn) { nextBtn.disabled = true; nextBtn.classList.add("locked-until-answer"); }
+}
+
+function updateChipCount() {
+  const countEl = document.getElementById("chipAnswerCount");
+  const n = (window.selectedCodes || []).length;
+  if (countEl) countEl.textContent = n === 0 ? "" : n + " answer" + (n > 1 ? "s" : "") + " selected";
+  // Placeholder text in input when nothing selected
+  const input = document.getElementById("chipFilterInput");
+  if (input) input.placeholder = n === 0 ? "Type to filter…" : "Add more…";
+}
+
+function chipToggle(code, label) {
+  const isMulti = window.chipIsMulti;
+  const idx = window.selectedCodes.indexOf(code);
+  const item = document.querySelector('.chip-option-item[data-code="' + code + '"]');
+
+  if (idx > -1) {
+    // Deselect
+    window.selectedCodes.splice(idx, 1);
+    if (item) item.classList.remove("chip-option-selected");
+    const chip = document.getElementById("chip-" + code);
+    if (chip) chip.remove();
+  } else {
+    // Select
+    if (!isMulti) {
+      // Single-select: clear previous
+      window.selectedCodes.forEach(c => {
+        const old = document.querySelector('.chip-option-item[data-code="' + c + '"]');
+        if (old) old.classList.remove("chip-option-selected");
+        const oldChip = document.getElementById("chip-" + c);
+        if (oldChip) oldChip.remove();
+      });
+      window.selectedCodes = [];
+    }
+    window.selectedCodes.push(code);
+    if (item) item.classList.add("chip-option-selected");
+    renderChipTag(code, label);
+  }
+
+  updateChipCount();
+
+  // Auto-submit for single-select
+  if (!isMulti && window.selectedCodes.length > 0) {
+    setTimeout(() => {
+      document.getElementById("chipFilterInput").disabled = true;
+      document.querySelectorAll(".chip-option-item").forEach(el => el.classList.add("chip-option-disabled"));
+      answerQuestion(window.selectedCodes[0]);
+    }, 260);
+  }
+}
+
+function renderChipTag(code, label) {
+  const selectedItems = document.getElementById("chipSelectedItems");
+  const input = document.getElementById("chipFilterInput");
+  const tag = document.createElement("span");
+  tag.className = "chip-tag";
+  tag.id = "chip-" + code;
+  tag.innerHTML = escapeHtml(label) + ' <span class="chip-x" title="Remove">×</span>';
+  tag.querySelector(".chip-x").onclick = (e) => {
+    e.stopPropagation();
+    if (tag.classList.contains("chip-locked")) return;
+    chipToggle(code, label);
+  };
+  // Insert chip before the input field
+  selectedItems.insertBefore(tag, input);
+}
+
+function filterChipOptions() {
+  const query = (document.getElementById("chipFilterInput").value || "").toLowerCase().trim();
+  document.querySelectorAll(".chip-option-item").forEach(item => {
+    const labelEl = item.querySelector(".chip-option-label");
+    const code    = item.dataset.code || "";
+    const text    = (labelEl ? labelEl.textContent : "") + " " + code;
+    const matches = !query || text.toLowerCase().includes(query);
+    item.classList.toggle("chip-option-hidden", !matches);
+
+    // Highlight matching text
+    if (labelEl && query) {
+      const plain = labelEl.textContent;
+      const lo    = plain.toLowerCase();
+      const i     = lo.indexOf(query);
+      if (i > -1) {
+        labelEl.innerHTML =
+          escapeHtml(plain.slice(0, i)) +
+          '<mark>' + escapeHtml(plain.slice(i, i + query.length)) + '</mark>' +
+          escapeHtml(plain.slice(i + query.length));
+      } else {
+        labelEl.textContent = plain;
+      }
+    } else if (labelEl) {
+      labelEl.textContent = labelEl.textContent;
+    }
+  });
+}
+
+// Lock chips after submit (called from submitMultiSelect / answerQuestion)
+function lockChipSelect() {
+  const filterInput = document.getElementById("chipFilterInput");
+  if (filterInput) filterInput.disabled = true;
+  document.querySelectorAll(".chip-option-item").forEach(el => el.classList.add("chip-option-disabled"));
+  document.querySelectorAll(".chip-tag").forEach(el => el.classList.add("chip-locked"));
+  // Unlock Next button after answer
+  const nextBtn = document.getElementById("sectionNextBtn");
+  if (nextBtn) { nextBtn.disabled = false; nextBtn.classList.remove("locked-until-answer"); }
+}
+
+
+function filterChipOptions() {
+  const query = (document.getElementById("chipFilterInput").value || "").toLowerCase().trim();
+  document.querySelectorAll(".chip-option-item").forEach(item => {
+    const labelEl = item.querySelector(".chip-option-label");
+    const code    = item.dataset.code || "";
+    const text    = (labelEl ? labelEl.textContent : "") + " " + code;
+    const matches = !query || text.toLowerCase().includes(query);
+    item.classList.toggle("chip-option-hidden", !matches);
+
+    // Highlight matching text
+    if (labelEl && query) {
+      const plain = labelEl.textContent;
+      const lo    = plain.toLowerCase();
+      const i     = lo.indexOf(query);
+      if (i > -1) {
+        labelEl.innerHTML =
+          escapeHtml(plain.slice(0, i)) +
+          '<mark>' + escapeHtml(plain.slice(i, i + query.length)) + '</mark>' +
+          escapeHtml(plain.slice(i + query.length));
+      } else {
+        labelEl.textContent = plain;
+      }
+    } else if (labelEl) {
+      labelEl.textContent = labelEl.textContent; // no-op restore
+    }
+  });
+}
+
+// Lock chips after submit (called from submitMultiSelect / answerQuestion)
+function lockChipSelect() {
+  const filterInput = document.getElementById("chipFilterInput");
+  if (filterInput) filterInput.disabled = true;
+  document.querySelectorAll(".chip-option-item").forEach(el => el.classList.add("chip-option-disabled"));
+  document.querySelectorAll(".chip-tag").forEach(el => el.classList.add("chip-locked"));
+}
+
+// Called by the Start button in the welcome screen
+function startCourse() {
+  const nameInput  = document.getElementById("nameInput").value.trim();
+  const emailInput = document.getElementById("emailInput").value.trim();
+  const codeEl     = document.getElementById("accessCode");
+  const codeInput  = codeEl ? codeEl.value.trim() : "";
+
+  let valid = true;
+  if (!nameInput) { document.getElementById("nameError").style.display = "block"; valid = false; }
+  else              document.getElementById("nameError").style.display = "none";
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailInput || !emailRegex.test(emailInput)) { document.getElementById("emailError").style.display = "block"; valid = false; }
+  else document.getElementById("emailError").style.display = "none";
+
+  if (!codeInput) { document.getElementById("codeError").style.display = "block"; valid = false; }
+  else document.getElementById("codeError").style.display = "none";
+
+  if (!valid) return;
+
+  const loadingEl = document.getElementById("loadingScreen");
+  const welcomeEl = document.getElementById("welcome");
+  if (loadingEl) loadingEl.classList.add("active");
+  if (welcomeEl) welcomeEl.classList.remove("active");
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "validateAccessCode", code: codeInput })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.valid) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      document.getElementById("codeError").style.display = "block";
+      return;
+    }
+    document.getElementById("codeError").style.display = "none";
+    playerName  = nameInput;
+    playerEmail = emailInput;
+
+    if (cases.length === 0) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      alert(window.caseLoadFailed
+        ? "Could not load cases from SharePoint. Please check your Power Automate flow and refresh."
+        : "Cases are still loading. Please wait a moment and try again.");
+      return;
+    }
+
+    const access = checkCourseAccess();
+    if (!access.allowed) {
+      if (loadingEl) loadingEl.classList.remove("active");
+      if (welcomeEl) welcomeEl.classList.add("active");
+      alert(access.message);
+      return;
+    }
+
+    loadProgress(emailInput).then(async saved => {
+      if (loadingEl) loadingEl.classList.remove("active");
+
+      // Always fetch fresh reveal state right now so we have the real liveMode/courseStarted
+      await fetchRevealState();
+
+      // If live mode is on and speaker hasn't started yet → waiting screen
+      if (liveMode && !liveRevealState.courseStarted) {
+        startCourseTimer();
+        updateProgress();
+        showScreen("waitingForStart");
+        _pollUntilCourseStart(saved);
+        return;
+      }
+
+      _enterCourse(saved);
+    });
+  })
+  .catch(err => {
+    if (loadingEl) loadingEl.classList.remove("active");
+    if (welcomeEl) welcomeEl.classList.add("active");
+    alert("Could not verify access code. Please check your connection and try again.");
+  });
+}
+
+function goToResults() {
+  clearInterval(timerInterval);
+  clearInterval(courseTimer);
+  stopBackgroundPoll(); // course is done, no need to watch speaker state anymore
+
+  // Calculate and store final score before sending
+  const totalQ = totalQuestions();
+  window.finalScoreOutOf10 = totalQ > 0
+    ? Math.round((score / (totalQ * 10)) * 100) / 10
+    : 0;
+
+  clearProgress(); // remove saved progress on completion
+  sendResultToSharePoint();
+
+  const maxScore = totalQ * 10;
+  const finalScore = window.finalScoreOutOf10 || Math.round((score / maxScore) * 100) / 10;
+  const pct = Math.round((score / maxScore) * 100);
+
+  let message = "";
+  if (pct >= 80) message = "Excellent performance! You're well prepared.";
+  else if (pct >= 60) message = "Good effort! Review the cases you missed.";
+  else message = "Keep practising — radiology takes time to master.";
+
+  document.getElementById("finalScore").innerText = finalScore + " / 10";
+  document.getElementById("finalName").innerText = playerName;
+  document.getElementById("resultMessage").innerText = message;
+
+  const badge = pct >= 90 ? "🏆" : pct >= 75 ? "🥇" : pct >= 60 ? "🥈" : pct >= 40 ? "🥉" : "📋";
+  const rankLabel = pct >= 90 ? "Top Performer" : pct >= 75 ? "High Scorer" : pct >= 60 ? "Good Standing" : "Keep Practising";
+  const rcBadge = document.getElementById("rcBadge"); if (rcBadge) rcBadge.textContent = badge;
+  const rcName = document.getElementById("rcName"); if (rcName) rcName.textContent = playerName;
+  const rcScore = document.getElementById("rcScore"); if (rcScore) rcScore.textContent = finalScore + " / 10";
+  const rcMessage = document.getElementById("rcMessage"); if (rcMessage) rcMessage.textContent = message;
+  const rcRank = document.getElementById("rcRank"); if (rcRank) rcRank.textContent = "⭐ " + rankLabel;
+
+  showScreen("results");
+}
+
+function goToLeaderboard() {
+  showScreen("leaderboard");
+
+  const el = document.getElementById("leaderboardMsg");
+  el.innerHTML = "<p style='color:var(--muted);font-size:14px;text-align:center;padding:20px'>Loading scores\u2026</p>";
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getLeaderboard" })
+  })
+  .then(res => {
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  })
+  .then(data => {
+    // SharePoint Get items returns { value: [...] }
+    // Each item has Title (name), Email, Score fields
+    console.log("Leaderboard raw:", JSON.stringify(data).slice(0, 800));
+    const raw = Array.isArray(data) ? data : (data.value || []);
+
+    const rows = raw.map(item => ({
+      name:  item.Name || item.name || item.Title || "—",
+      email: item.Email || item.email || "",
+      score: item.Score !== undefined ? Number(item.Score) : (item.score !== undefined ? Number(item.score) : 0)
+    }));
+
+    if (rows.length === 0) {
+      el.innerHTML = "<p style='color:var(--muted);font-size:14px;text-align:center;padding:40px'>No scores yet. Be the first to finish!</p>";
+      return;
+    }
+
+    rows.sort((a, b) => b.score - a.score);
+
+    let html = "<table style='width:100%;border-collapse:collapse;font-size:14px;'>";
+    html += "<thead><tr style='border-bottom:2px solid var(--border);'>"
+          + "<th style='text-align:left;padding:10px 8px;color:var(--muted);font-weight:600'>#</th>"
+          + "<th style='text-align:left;padding:10px 8px;color:var(--muted);font-weight:600'>Name</th>"
+          + "<th style='text-align:right;padding:10px 8px;color:var(--muted);font-weight:600'>Score</th>"
+          + "</tr></thead><tbody>";
+
+    rows.forEach((row, i) => {
+      const medal     = i === 0 ? "\uD83E\uDD47" : i === 1 ? "\uD83E\uDD48" : i === 2 ? "\uD83E\uDD49" : (i + 1) + ".";
+      const isMe      = row.name === playerName;
+      const highlight = isMe ? "background:rgba(92,45,126,0.07);font-weight:600;" : "";
+      html += "<tr style='border-bottom:1px solid var(--border);" + highlight + "'>"
+            + "<td style='padding:12px 8px'>" + medal + "</td>"
+            + "<td style='padding:12px 8px'>" + row.name + (isMe ? " <span style='color:var(--accent);font-size:11px'>(you)</span>" : "") + "</td>"
+            + "<td style='padding:12px 8px;text-align:right;font-family:JetBrains Mono,monospace;color:var(--accent)'>" + (Math.round(row.score * 10) / 10) + " / 10</td>"
+            + "</tr>";
+    });
+
+    html += "</tbody></table>";
+    el.innerHTML = html;
+  })
+  .catch(err => {
+    console.warn("Leaderboard error:", err);
+    el.innerHTML = "<p style='color:var(--muted);font-size:14px;text-align:center;padding:40px'>Could not load leaderboard.<br>Your score has been saved successfully.</p>";
+  });
+}
+
+// =======================
+// TOP BAR & EXIT
+// =======================
+
+function updateTopBar() {
+  const center  = document.getElementById("topBarCenter");
+  const crumb   = document.getElementById("topBarCrumb");
+  const exitBtn = document.getElementById("exitBtn");
+  if (!center || !exitBtn || !crumb) return;
+
+  const activeScreen = document.querySelector(".screen.active");
+  const screenId = activeScreen ? activeScreen.id : "";
+
+  if (["question","caseIntro","feedback"].includes(screenId) && screenId !== "admin" && screenId !== "adminLogin") {
+    center.style.display = "flex";
+    exitBtn.style.display = "inline-flex";
+    crumb.innerHTML =
+      '<span class="crumb-case">Case ' + (currentCaseIndex + 1) + ' of ' + cases.length + '</span>' +
+      '<span class="crumb-sep">·</span>' +
+      '<span>Question ' + (currentQuestionIndex + 1) + ' / ' + cases[currentCaseIndex].questions.length + '</span>';
+  } else {
+    center.style.display = "none";
+    exitBtn.style.display = "none";
+  }
+}
+
+function confirmExit() {
+  if (confirm("Are you sure you want to exit? Your progress will be lost.")) {
+    location.reload();
+  }
+}
+
+// =======================
+// TEMPORIZADOR CURSO
+// =======================
+
+function formatTime(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes + ":" + (remainingSeconds < 10 ? "0" : "") + remainingSeconds;
+}
+
+function startCourseTimer() {
+  // Reset time every time a new course starts
+  courseTimeLeft = 45 * 60;
+  courseTimer = null;
+
+  const display = document.getElementById("courseTimeDisplay");
+  if (display) display.innerText = formatTime(courseTimeLeft);
+
+  courseTimer = setInterval(() => {
+    courseTimeLeft--;
+    if (display) display.innerText = formatTime(courseTimeLeft);
+    if (courseTimeLeft <= 0) {
+      clearInterval(courseTimer);
+      goToResults();
+    }
+  }, 1000);
+}
+
+function startCaseTimer() {
+  // Per-case timer removed — only the 45-min course timer is used.
+}
+
+
+// =======================
+// RESPUESTAS
+// =======================
+
+function answerQuestion(selectedAnswer) {
+  clearInterval(timerInterval);
+  recordQuestionTime();
+
+  const c = cases[currentCaseIndex];
+  const q = getCurrentQuestion();
+
+  updateTutorContext({
+    caseTitle:    c.intro || c.title || "",
+    caseContent:  c.content || "",
+    questionText: q.text || "",
+    options:      (q.options||[]).map(o => o.code+": "+o.label).join(", "),
+    correctAnswer: q.correctAnswer || "",
+    userAnswer:   selectedAnswer,
+    explanation:  q.explanation || ""
+  });
+
+  const correctAnswers = q.correctAnswer.split(",").map(a => a.trim().toUpperCase());
+  const isCorrect = correctAnswers.includes(selectedAnswer.toUpperCase());
+
+  document.querySelectorAll(".answer-btn").forEach(btn => btn.disabled = true);
+  lockChipSelect();
+  const fs = document.getElementById("freetextSubmit");
+  if (fs) fs.disabled = true;
+
+  const key = answerKey();
+  if (!userAnswers[key]) userAnswers[key] = { userAnswers: [], isCorrect: false, pointsEarned: 0 };
+  userAnswers[key].userAnswers.push(selectedAnswer);
+
+  if (!window.mcSelectedCorrect) window.mcSelectedCorrect = 0;
+  if (isCorrect) window.mcSelectedCorrect++;
+
+  const totalCorrect    = correctAnswers.length;
+  const pointsPerAnswer = Math.floor(10 / totalCorrect);
+  const bonusPoint      = 10 % totalCorrect;
+  const pointsEarned    = Math.min(10, isCorrect
+    ? (window.mcSelectedCorrect === 1 ? pointsPerAnswer + bonusPoint : pointsPerAnswer)
+    : 0);
+  score += pointsEarned;
+
+  showFeedback(isCorrect, q, correctAnswers.length, pointsEarned);
+}
+
+function showFeedback(isCorrect, q, totalCorrect, pointsEarned) {
+  notifyTutor(isCorrect);
+
+  const numCorrect = totalCorrect || 1;
+  if (pointsEarned === undefined) {
+    pointsEarned = isCorrect ? Math.floor(10 / numCorrect) + (10 % numCorrect) : 0;
+  }
+
+  document.getElementById("feedbackIcon").innerText  = isCorrect ? "✅" : "❌";
+  document.getElementById("feedbackTitle").innerText = isCorrect ? "Correct!" : "Incorrect";
+  document.getElementById("scoreGained").innerText   = isCorrect
+    ? "+" + pointsEarned + " pts" + (numCorrect > 1 ? " (" + pointsEarned + " of 10)" : "")
+    : "+0 pts";
+  document.getElementById("scoreGained").style.color = isCorrect ? "var(--accent)" : "var(--danger)";
+
+  const key = answerKey();
+  if (!userAnswers[key]) userAnswers[key] = { userAnswers: [], isCorrect: false, pointsEarned: 0 };
+  userAnswers[key].isCorrect    = isCorrect;
+  userAnswers[key].pointsEarned = pointsEarned;
+
+  const correctCodes  = q.correctAnswer.split(",").map(a => a.trim().toUpperCase());
+  const correctLabels = correctCodes.map(code => {
+    const opt = (q.options || []).find(o => o.code === code);
+    return opt ? opt.label : code;
+  });
+  document.getElementById("feedbackCorrectAnswer").innerText =
+    (correctLabels.length > 1 ? "Correct answers: " : "Correct answer: ") + correctLabels.join(" / ");
+  document.getElementById("feedbackExplanation").innerText = q.explanation || "";
+
+  // Next button label — check if there are more questions/sub-questions
+  const nextPath = getNextPath();
+  const nextBtn  = document.getElementById("nextBtn");
+  if (nextBtn) {
+    if (nextPath) {
+      const nextNum = nextPath.map(i => i + 1).join(".");
+      nextBtn.innerText = "Question " + nextNum + " →";
+    } else if (currentCaseIndex < cases.length - 1) {
+      nextBtn.innerText = "Next Case →";
+    } else {
+      nextBtn.innerText = "See Results →";
+    }
+  }
+
+  presentFeedback();
+}
+
+function handleNext() {
+  const nextPath = getNextPath();
+  if (nextPath) {
+    questionPath = nextPath;
+    currentQuestionIndex = questionPath[0];
+    saveProgress();
+    showScreen("question");
+    loadQuestion();
+  } else {
+    nextCase();
+  }
+}
+
+// Aliases for new PACS navigation buttons
+function handleSectionNext() { handleNext(); }
+function handleSectionBack() {
+  const c = cases[currentCaseIndex];
+  const sectionIdx = questionPath[0];
+  if (sectionIdx > 0) {
+    questionPath = [sectionIdx - 1];
+    currentQuestionIndex = questionPath[0];
+    showScreen("question");
+    loadQuestion();
+  } else if (currentCaseIndex > 0) {
+    // Go to last question of previous case
+    currentCaseIndex--;
+    const prevCase = cases[currentCaseIndex];
+    const lastIdx = prevCase.questions.length - 1;
+    questionPath = [lastIdx];
+    currentQuestionIndex = lastIdx;
+    showScreen("question");
+    loadQuestion();
+  }
+}
+
+
+function goToQuestion() {
+  questionPath = [0];
+  currentQuestionIndex = 0;
+  showScreen("question");
+  loadQuestion();
+  startCaseTimer();
+}
+
+function nextCase() {
+  currentCaseIndex++;
+  questionPath = [0];
+  currentQuestionIndex = 0;
+  saveProgress();
+  updateProgress();
+  if (currentCaseIndex < cases.length) {
+    loadCaseIntro();
+    showScreen("caseIntro");
+  } else {
+    goToResults();
+  }
+}
+
+function sendResultToSharePoint() {
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "saveScore",
+      name:   playerName,
+      email:  playerEmail,
+      score:  window.finalScoreOutOf10 || 0
+    })
+  })
+  .then(res => console.log("Score saved, status:", res.status))
+  .catch(err => console.error("Save error:", err));
+}
+
+// =======================
+// DICOM VIEWER
+// =======================
+
+let dicomCurrentUrl = null;
+
+function dicomLoadFrame(url) {
+  dicomCurrentUrl = url;
+  const dicomSection = document.getElementById("dicomSection");
+  const loading      = document.getElementById("dicomLoading");
+
+  // Remove old frame
+  const oldFrame = document.getElementById("dicomFrame");
+  if (oldFrame) oldFrame.remove();
+
+  // Show loading overlay
+  if (loading) { loading.style.display = "flex"; }
+
+  const frame = document.createElement("iframe");
+  frame.id             = "dicomFrame";
+  frame.allowFullscreen = true;
+  frame.style.cssText  = "width:100%;height:calc(100vh - 120px);max-height:900px;min-height:500px;border:1px solid var(--border);border-radius:12px;background:#000;display:block;touch-action:auto;";
+
+  frame.onload = () => {
+    if (loading) loading.style.display = "none";
+    // Try to suppress EBR sidebar (may be blocked cross-origin — that's fine)
+    try {
+      const doc = frame.contentDocument || frame.contentWindow.document;
+      const s   = doc.createElement("style");
+      s.textContent = ".sidebar,.table-of-contents,nav,#sidebar,[class*='sidebar'],[class*='contents'],[class*='navigation']{display:none!important}.main-content,.content,[class*='content']{margin-left:0!important;width:100%!important}";
+      doc.head.appendChild(s);
+    } catch(e) {}
+  };
+
+  frame.src = url;
+  dicomSection.appendChild(frame);
+}
+
+function refreshDicom() {
+  const q = cases[currentCaseIndex]?.questions[currentQuestionIndex];
+  if (!q || q.imageType !== "dicom" || !q.imageUrl) return;
+
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) { window.open(q.imageUrl, "_blank"); return; }
+
+  const btn = document.getElementById("dicomRefreshBtn");
+  if (btn) { btn.innerText = "↺ Reloading…"; btn.disabled = true; }
+
+  dicomLoadFrame(q.imageUrl);
+
+  setTimeout(() => {
+    if (btn) { btn.innerText = "↺ Reload"; btn.disabled = false; }
+  }, 2000);
+}
+
+function dicomOpenNewTab() {
+  if (dicomCurrentUrl) window.open(dicomCurrentUrl, "_blank");
+}
+
+// =======================
+// CASE INTRO DICOM LOADER
+// =======================
+let caseIntroDicomCurrentUrl = null;
+
+function dicomLoadCaseIntroFrame(url) {
+  caseIntroDicomCurrentUrl = url;
+  const container = document.getElementById("caseIntroDicom");
+  const loading   = document.getElementById("caseIntroLoading");
+
+  // Remove old frame and create a fresh one
+  const oldFrame = document.getElementById("caseIntroDicomFrame");
+  if (oldFrame) oldFrame.remove();
+
+  if (loading) loading.style.display = "flex";
+
+  const frame = document.createElement("iframe");
+  frame.id              = "caseIntroDicomFrame";
+  frame.allowFullscreen = true;
+  frame.style.cssText   = "width:100%;height:calc(100vh - 120px);max-height:900px;min-height:500px;border:1px solid var(--border);border-radius:12px;background:#000;display:block;touch-action:auto;";
+
+  frame.onload = () => {
+    if (loading) loading.style.display = "none";
+    // Try to suppress EBR sidebar (may be blocked cross-origin — that's fine)
+    try {
+      const doc = frame.contentDocument || frame.contentWindow.document;
+      const s   = doc.createElement("style");
+      s.textContent = ".sidebar,.table-of-contents,nav,#sidebar,[class*='sidebar'],[class*='contents'],[class*='navigation']{display:none!important}.main-content,.content,[class*='content']{margin-left:0!important;width:100%!important}";
+      doc.head.appendChild(s);
+    } catch(e) {}
+  };
+
+  frame.src = url;
+  if (container) container.appendChild(frame);
+}
+
+function refreshCaseIntroDicom() {
+  const c = cases[currentCaseIndex];
+  if (!c || c.imageType !== "dicom" || !c.imageUrl) return;
+
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) { window.open(c.imageUrl, "_blank"); return; }
+
+  const btn = document.getElementById("caseIntroDicomRefreshBtn");
+  if (btn) { btn.innerText = "↺ Reloading…"; btn.disabled = true; }
+
+  dicomLoadCaseIntroFrame(c.imageUrl);
+
+  setTimeout(() => {
+    if (btn) { btn.innerText = "↺ Reload"; btn.disabled = false; }
+  }, 2000);
+}
+
+let dicomIsFullscreen = false;
+let dicomSectionParent = null; // remember original parent for restore
+let dicomSectionNextSibling = null; // remember position in DOM
+
+function dicomToggleFullscreen() {
+  const section  = document.getElementById("dicomSection");
+  const btn      = document.getElementById("dicomFullscreenBtn");
+  const topBar   = document.getElementById("topBar");
+  const progBar  = document.getElementById("progressBar");
+
+  dicomIsFullscreen = !dicomIsFullscreen;
+
+  if (dicomIsFullscreen) {
+    // Remember where it lives in the DOM
+    dicomSectionParent      = section.parentNode;
+    dicomSectionNextSibling = section.nextSibling;
+
+    // Move to body so nothing clips it
+    document.body.appendChild(section);
+    section.classList.add("dicom-fullscreen");
+
+    // Clear inline height on iframe so CSS flex can take over
+    const frame = section.querySelector("iframe");
+    if (frame) { frame.style.height = "100%"; frame.style.maxHeight = "none"; frame.style.minHeight = "0"; }
+
+    // Hide page chrome
+    if (topBar)  topBar.style.display  = "none";
+    if (progBar) progBar.style.display = "none";
+
+    if (btn) { btn.innerText = "✕ Exit"; btn.style.background = "rgba(192,57,43,0.9)"; btn.style.color = "#fff"; btn.style.borderColor = "transparent"; }
+    document.body.style.overflow = "hidden";
+
+    // Floating exit button
+    let exitBtn = document.getElementById("dicomExitOverlay");
+    if (!exitBtn) {
+      exitBtn = document.createElement("button");
+      exitBtn.id = "dicomExitOverlay";
+      exitBtn.innerText = "✕ Exit Fullscreen";
+      exitBtn.style.cssText = "position:fixed;top:12px;right:12px;z-index:9999;background:rgba(0,0,0,0.75);color:#fff;border:2px solid rgba(255,255,255,0.35);border-radius:10px;padding:10px 20px;font-size:14px;font-family:'DM Sans',sans-serif;font-weight:700;cursor:pointer;";
+      exitBtn.onclick = dicomToggleFullscreen;
+      document.body.appendChild(exitBtn);
+    }
+    exitBtn.style.display = "block";
+
+  } else {
+    // Move back to original position
+    section.classList.remove("dicom-fullscreen");
+
+    // Restore iframe inline height
+    const frame = section.querySelector("iframe");
+    if (frame) { frame.style.height = "calc(100vh - 120px)"; frame.style.maxHeight = "900px"; frame.style.minHeight = "500px"; }
+
+    if (dicomSectionParent) {
+      dicomSectionParent.insertBefore(section, dicomSectionNextSibling);
+    }
+
+    // Restore page chrome
+    if (topBar)  topBar.style.display  = "";
+    if (progBar) progBar.style.display = "";
+
+    if (btn) { btn.innerText = "⛶ Fullscreen"; btn.style.background = ""; btn.style.color = ""; btn.style.borderColor = ""; }
+    document.body.style.overflow = "";
+    const exitBtn = document.getElementById("dicomExitOverlay");
+    if (exitBtn) exitBtn.style.display = "none";
+  }
+}
+
+// Close fullscreen on Escape key
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && dicomIsFullscreen) dicomToggleFullscreen();
+});
+
+
+
+// =======================
+// FREETEXT + INLINE AUTOCOMPLETE (multi-field)
+// =======================
+
+// =======================
+// FREETEXT — TAG BOX + LIST
+// =======================
+// One input box that shows selected answers as removable tags.
+// A shared suggestion list below — click to add, click tag × to remove.
+
+let ftSelectedTags   = [];
+let ftSuggestions    = [];
+let ftNumRequired    = 1;
+let ftAllowMulti     = false;
+let ftCascadingData  = null; // cascading suggestions [{label, sub:[]}]
+let ftLevel1Selected = null; // currently selected level-1 item
+
+function buildFreetextFields(numFields, suggestions) {
+  ftSelectedTags   = [];
+  ftSuggestions    = suggestions.slice();
+  ftNumRequired    = numFields;
+  ftLevel1Selected = null;
+
+  const container = document.getElementById("freetextFields");
+  container.innerHTML = "";
+
+  // ── Cascading mode ────────────────────────────────────
+  if (ftCascadingData && ftCascadingData.length > 0) {
+    buildCascadingFields(container);
+    return;
+  }
+
+  // ── Standard tag-box mode ─────────────────────────────
+  const boxLabel = document.createElement("div");
+  boxLabel.className = "freetext-field-label";
+  boxLabel.innerText = ftAllowMulti ? "Select your answer(s) from the list below:" : "Select your answer from the list below:";
+  container.appendChild(boxLabel);
+
+  const tagBox = document.createElement("div");
+  tagBox.id = "ftTagBox";
+  tagBox.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:10px 12px;border:2px solid var(--border);border-radius:10px;background:var(--surface);min-height:50px;cursor:text;transition:border-color 0.2s;";
+  tagBox.onclick = () => document.getElementById("ftSearchInput").focus();
+
+  const searchInput = document.createElement("input");
+  searchInput.id = "ftSearchInput";
+  searchInput.type = "text";
+  searchInput.placeholder = suggestions.length > 0 ? "Type to filter…" : "No suggestions";
+  searchInput.autocomplete = "off";
+  searchInput.style.cssText = "border:none;outline:none;background:transparent;font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);flex:1;min-width:120px;padding:2px 4px;";
+  searchInput.addEventListener("input", () => ftFilterList(searchInput.value));
+  tagBox.appendChild(searchInput);
+  container.appendChild(tagBox);
+
+  searchInput.addEventListener("focus", () => tagBox.style.borderColor = "var(--accent)");
+  searchInput.addEventListener("blur",  () => tagBox.style.borderColor = ftSelectedTags.length ? "var(--accent)" : "var(--border)");
+
+  const counter = document.createElement("div");
+  counter.id = "ftCounter";
+  counter.style.cssText = "font-size:12px;color:var(--muted);text-align:right;margin-top:4px;margin-bottom:4px;min-height:16px;";
+  container.appendChild(counter);
+
+  const listLabel = document.createElement("div");
+  listLabel.className = "freetext-field-label";
+  listLabel.style.marginTop = "10px";
+  listLabel.innerText = "Available answers:";
+  container.appendChild(listLabel);
+
+  const list = document.createElement("ul");
+  list.className = "freetext-persistent-list";
+  list.id = "ftSuggestionList";
+  suggestions.forEach(s => {
+    const li = document.createElement("li");
+    li.className = "freetext-list-item";
+    li.textContent = s;
+    li.dataset.value = s;
+    li.addEventListener("click", () => {
+      ftAddTag(s);
+    });
+    list.appendChild(li);
+  });
+  container.appendChild(list);
+
+  const submitBtn = document.getElementById("freetextSubmit");
+  if (submitBtn) submitBtn.style.display = "block";
+
+  setTimeout(() => searchInput.focus(), 100);
+}
+
+// ── Cascading UI ─────────────────────────────────────────────────────────────
+
+function buildCascadingFields(container) {
+  const lbl = document.createElement("div");
+  lbl.className = "freetext-field-label";
+  lbl.innerText = "Select your answer from the list:";
+  container.appendChild(lbl);
+
+  // Tag box
+  const tagBox = document.createElement("div");
+  tagBox.id = "ftTagBox";
+  tagBox.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:10px 12px;border:2px solid var(--border);border-radius:10px;background:var(--surface);min-height:44px;margin-bottom:6px;transition:border-color 0.2s;";
+  const si = document.createElement("input");
+  si.id = "ftSearchInput";
+  si.type = "text";
+  si.placeholder = "Type to filter…";
+  si.autocomplete = "off";
+  si.style.cssText = "border:none;outline:none;background:transparent;font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);flex:1;min-width:100px;padding:2px 4px;";
+  si.addEventListener("input", () => ftFilterCascade(si.value));
+  tagBox.appendChild(si);
+  container.appendChild(tagBox);
+
+  const counter = document.createElement("div");
+  counter.id = "ftCounter";
+  counter.style.cssText = "font-size:12px;color:var(--muted);text-align:right;margin-bottom:10px;min-height:16px;";
+  container.appendChild(counter);
+
+  // Unified list — same look as normal suggestion list
+  const list = document.createElement("ul");
+  list.id = "ftCascadeAccordion";
+  list.style.cssText = "list-style:none;padding:6px;margin:0;background:var(--surface);border:2px solid var(--border);border-radius:12px;display:flex;flex-direction:column;gap:2px;max-height:320px;overflow-y:auto;";
+
+  ftCascadingData.forEach((item, idx) => {
+    const label  = item.label || item;
+    const hasSub = item.sub && item.sub.length > 0;
+
+    // Main item
+    const li = document.createElement("li");
+    li.id = "ftCascadeRow_" + idx;
+    li.dataset.label = label;
+    li.style.cssText = "display:flex;align-items:center;padding:11px 16px;font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);cursor:pointer;border-radius:8px;border:2px solid transparent;transition:background 0.15s,border-color 0.15s;user-select:none;";
+    li.innerHTML = `
+      <span style="flex:1;">${escapeHtml(label)}</span>
+      <span id="ftCascadeArrow_${idx}" style="font-size:11px;color:var(--muted);margin-left:8px;transition:transform 0.2s;display:inline-block;">${hasSub ? "▶" : ""}</span>
+      <span id="ftCascadeCheck_${idx}" style="display:none;color:var(--accent);font-weight:700;font-size:14px;margin-left:8px;">✓</span>`;
+
+    li.addEventListener("mouseenter", () => { if (!li.classList.contains("selected")) li.style.background = "rgba(92,45,126,0.06)"; });
+    li.addEventListener("mouseleave", () => { if (!li.classList.contains("selected")) li.style.background = ""; });
+
+    li.addEventListener("click", () => {
+      if (!hasSub) {
+        ftSelectCascadeItem(label, label, idx);
+        return;
+      }
+      // Toggle sub-panel
+      const subPanel = document.getElementById("ftSubPanel_" + idx);
+      const isOpen   = subPanel && subPanel.style.display !== "none";
+      // Close all others
+      ftCascadingData.forEach((_, i) => {
+        const p = document.getElementById("ftSubPanel_" + i);
+        const a = document.getElementById("ftCascadeArrow_" + i);
+        if (p && i !== idx) p.style.display = "none";
+        if (a && i !== idx) a.style.transform = "";
+      });
+      if (subPanel) subPanel.style.display = isOpen ? "none" : "block";
+      const arrow = document.getElementById("ftCascadeArrow_" + idx);
+      if (arrow) arrow.style.transform = (!isOpen) ? "rotate(90deg)" : "";
+    });
+
+    list.appendChild(li);
+
+    // Sub-options inline below
+    if (hasSub) {
+      const subPanel = document.createElement("div");
+      subPanel.id = "ftSubPanel_" + idx;
+      subPanel.style.cssText = "display:none;padding:0 0 4px 16px;";
+
+      item.sub.forEach((sub, subIdx) => {
+        const subLi = document.createElement("li");
+        subLi.id = "ftCascadeSubRow_" + idx + "_" + subIdx;
+        subLi.dataset.full = label + " " + sub;
+        subLi.style.cssText = "list-style:none;display:flex;align-items:center;padding:9px 16px;font-size:14px;font-family:'DM Sans',sans-serif;color:var(--text);cursor:pointer;border-radius:8px;border:2px solid transparent;transition:background 0.15s;";
+        subLi.innerHTML = `
+          <span id="ftSubDot_${idx}_${subIdx}" style="width:7px;height:7px;border-radius:50%;border:2px solid var(--border);margin-right:10px;flex-shrink:0;transition:all 0.15s;"></span>
+          <span style="flex:1;">${escapeHtml(sub)}</span>
+          <span id="ftSubCheck_${idx}_${subIdx}" style="display:none;color:var(--accent);font-weight:700;font-size:14px;">✓</span>`;
+
+        subLi.addEventListener("mouseenter", () => { if (!ftSelectedTags.includes(subLi.dataset.full)) subLi.style.background = "rgba(92,45,126,0.06)"; });
+        subLi.addEventListener("mouseleave", () => { if (!ftSelectedTags.includes(subLi.dataset.full)) subLi.style.background = ""; });
+        subLi.addEventListener("click", (e) => {
+          e.stopPropagation();
+          ftSelectCascadeItem(sub, label + " " + sub, idx, subIdx);
+        });
+        subPanel.appendChild(subLi);
+      });
+      list.appendChild(subPanel);
+    }
+  });
+
+  container.appendChild(list);
+
+  const submitBtn = document.getElementById("freetextSubmit");
+  if (submitBtn) submitBtn.style.display = "block";
+}
+
+function ftSelectCascadeItem(displayLabel, fullAnswer, parentIdx, subIdx) {
+  if (!ftAllowMulti) {
+    // Single mode — replace everything
+    ftSelectedTags = [];
+  }
+
+  // Toggle — if already selected, deselect
+  if (ftSelectedTags.includes(fullAnswer)) {
+    ftSelectedTags = ftSelectedTags.filter(t => t !== fullAnswer);
+  } else {
+    ftSelectedTags.push(fullAnswer);
+  }
+
+  ftRefreshCascadeUI();
+  ftRenderCascadeTags();
+  ftUpdateCounter();
+
+
+}
+
+function ftRefreshCascadeUI() {
+  ftCascadingData.forEach((item, idx) => {
+    const label  = item.label || item;
+    const hasSub = item.sub && item.sub.length > 0;
+    const header = document.querySelector("#ftCascadeRow_" + idx + " > div:first-child");
+    const check  = document.getElementById("ftCascadeCheck_" + idx);
+
+    if (!hasSub) {
+      // Direct selectable item
+      const isSelected = ftSelectedTags.includes(label);
+      if (header) header.style.background = isSelected ? "rgba(92,45,126,0.08)" : "var(--surface)";
+      if (check)  check.style.display     = isSelected ? "inline" : "none";
+    } else {
+      // Category with sub-items — highlight if any sub selected, but no check on header
+      const anySubSelected = (item.sub || []).some(sub => ftSelectedTags.includes(label + " " + sub));
+      if (header) header.style.background = anySubSelected ? "rgba(92,45,126,0.04)" : "var(--surface)";
+      if (check)  check.style.display     = anySubSelected ? "inline" : "none";
+
+      // Update sub-rows
+      (item.sub || []).forEach((sub, subIdx) => {
+        const fullAnswer = label + " " + sub;
+        const isSelected = ftSelectedTags.includes(fullAnswer);
+        const subRow = document.getElementById("ftCascadeSubRow_" + idx + "_" + subIdx);
+        const dot    = document.getElementById("ftSubDot_" + idx + "_" + subIdx);
+        const subChk = document.getElementById("ftSubCheck_" + idx + "_" + subIdx);
+        if (subRow) subRow.style.background = isSelected ? "rgba(92,45,126,0.08)" : "";
+        if (dot)    { dot.style.borderColor = isSelected ? "var(--accent)" : "var(--border)"; dot.style.background = isSelected ? "var(--accent)" : ""; }
+        if (subChk) subChk.style.display    = isSelected ? "inline" : "none";
+      });
+    }
+  });
+}
+
+function ftRenderCascadeTags() {
+  const tagBox = document.getElementById("ftTagBox");
+  if (!tagBox) return;
+  const si = document.getElementById("ftSearchInput");
+  tagBox.innerHTML = "";
+
+  ftSelectedTags.forEach(value => {
+    const tag = document.createElement("div");
+    tag.style.cssText = "display:inline-flex;align-items:center;gap:5px;padding:4px 10px 4px 12px;border-radius:20px;background:rgba(92,45,126,0.12);border:1px solid var(--accent);color:var(--accent);font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;white-space:nowrap;";
+    const txt = document.createElement("span");
+    txt.textContent = value;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.innerHTML = "×";
+    rm.style.cssText = "background:none;border:none;color:var(--accent);cursor:pointer;font-size:16px;line-height:1;padding:0;";
+    rm.onclick = (e) => {
+      e.stopPropagation();
+      ftSelectedTags = ftSelectedTags.filter(t => t !== value);
+      ftRenderCascadeTags();
+      ftRefreshCascadeUI();
+      ftUpdateCounter();
+    };
+    tag.appendChild(txt);
+    tag.appendChild(rm);
+    tagBox.appendChild(tag);
+  });
+
+  if (si) tagBox.appendChild(si);
+  tagBox.style.borderColor = ftSelectedTags.length > 0 ? "var(--accent)" : "var(--border)";
+
+  const submitBtn = document.getElementById("freetextSubmit");
+  if (submitBtn) submitBtn.style.display = "block";
+}
+
+function ftFilterCascade(val) {
+  const lower = val.toLowerCase();
+  ftCascadingData.forEach((item, idx) => {
+    const label  = item.label || item;
+    const row    = document.getElementById("ftCascadeRow_" + idx);
+    const matchL = !val || label.toLowerCase().includes(lower);
+    const matchS = !val || (item.sub || []).some(s => s.toLowerCase().includes(lower));
+    if (row) row.style.display = (matchL || matchS) ? "block" : "none";
+
+    // If filtering and sub matches, open the panel
+    if (val && matchS && !matchL) {
+      const panel = row.querySelector(".ft-cascade-sub-panel");
+      if (panel) panel.style.display = "block";
+      const arrow = document.getElementById("ftCascadeArrow_" + idx);
+      if (arrow) arrow.style.transform = "rotate(90deg)";
+    }
+
+    // Filter sub-rows
+    (item.sub || []).forEach((sub, subIdx) => {
+      const subRow = document.getElementById("ftCascadeSubRow_" + idx + "_" + subIdx);
+      if (subRow) subRow.style.display = (!val || sub.toLowerCase().includes(lower)) ? "flex" : "none";
+    });
+  });
+}
+
+function ftResetCascade() {
+  ftSelectedTags = [];
+  ftRenderCascadeTags();
+  ftRefreshCascadeUI();
+  ftUpdateCounter();
+}
+
+function ftAddTag(value) {
+  // Don't add duplicates
+  if (ftSelectedTags.includes(value)) return;
+
+  // If single-answer mode, replace existing tag
+  if (!ftAllowMulti && ftSelectedTags.length >= 1) {
+    ftSelectedTags = [];
+    ftRenderTags();
+    ftUpdateListState();
+  }
+
+  ftSelectedTags.push(value);
+  ftRenderTags();
+  ftUpdateListState();
+  ftUpdateCounter();
+
+  const si = document.getElementById("ftSearchInput");
+  if (si) { si.value = ""; ftFilterList(""); si.focus(); }
+  const hint = document.getElementById("freetextHint");
+  if (hint) { hint.innerText = ""; hint.style.color = ""; }
+}
+
+function ftRemoveTag(value) {
+  ftSelectedTags = ftSelectedTags.filter(t => t !== value);
+  ftRenderTags();
+  ftUpdateListState();
+  ftUpdateCounter();
+  document.getElementById("ftSearchInput")?.focus();
+}
+
+function ftRenderTags() {
+  const tagBox = document.getElementById("ftTagBox");
+  if (!tagBox) return;
+
+  // Remove existing tags (keep the search input)
+  const si = document.getElementById("ftSearchInput");
+  tagBox.innerHTML = "";
+
+  ftSelectedTags.forEach(value => {
+    const tag = document.createElement("div");
+    tag.style.cssText = `
+      display:inline-flex;align-items:center;gap:5px;
+      padding:4px 10px 4px 12px;border-radius:20px;
+      background:rgba(92,45,126,0.12);border:1px solid var(--accent);
+      color:var(--accent);font-size:13px;font-weight:600;
+      font-family:'DM Sans',sans-serif;white-space:nowrap;
+    `;
+    const txt = document.createElement("span");
+    txt.textContent = value;
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.innerHTML = "×";
+    removeBtn.style.cssText = `
+      background:none;border:none;color:var(--accent);
+      cursor:pointer;font-size:16px;line-height:1;padding:0;
+      display:flex;align-items:center;
+    `;
+    removeBtn.onclick = (e) => { e.stopPropagation(); ftRemoveTag(value); };
+
+    tag.appendChild(txt);
+    tag.appendChild(removeBtn);
+    tagBox.appendChild(tag);
+  });
+
+  // Re-add search input
+  tagBox.appendChild(si);
+  si.focus();
+
+  // Update border
+  tagBox.style.borderColor = ftSelectedTags.length > 0 ? "var(--accent)" : "var(--border)";
+}
+
+function ftUpdateCounter() {
+  const counter = document.getElementById("ftCounter");
+  if (!counter) return;
+  if (ftSelectedTags.length === 0) {
+    counter.innerText = "";
+  } else {
+    counter.innerText = ftSelectedTags.length + " answer" + (ftSelectedTags.length > 1 ? "s" : "") + " selected";
+    counter.style.color = "var(--accent)";
+  }
+}
+
+function ftUpdateListState() {
+  const list = document.getElementById("ftSuggestionList");
+  if (!list) return;
+  list.querySelectorAll(".freetext-list-item").forEach(li => {
+    const val      = li.dataset.value;
+    const selected = ftSelectedTags.includes(val);
+    li.classList.toggle("selected", selected);
+    li.style.opacity     = selected ? "0.5" : "1";
+    li.style.cursor      = selected ? "default" : "pointer";
+    // Show/hide checkmark
+    let check = li.querySelector(".ft-check");
+    if (selected) {
+      if (!check) {
+        check = document.createElement("span");
+        check.className = "ft-check";
+        check.style.cssText = "margin-left:auto;color:var(--accent);font-weight:700;";
+        check.innerText = "✓";
+        li.appendChild(check);
+      }
+    } else {
+      if (check) check.remove();
+    }
+  });
+}
+
+function ftFilterList(val) {
+  const list = document.getElementById("ftSuggestionList");
+  if (!list) return;
+  const lower = val.toLowerCase();
+  list.querySelectorAll(".freetext-list-item").forEach(li => {
+    const text    = li.dataset.value.toLowerCase();
+    const matches = !val || text.includes(lower);
+    li.style.display = matches ? "flex" : "none";
+    if (matches) {
+      const s     = li.dataset.value;
+      const check = li.querySelector(".ft-check");
+      const checkHtml = check ? check.outerHTML : "";
+      if (val) {
+        const start = s.toLowerCase().indexOf(lower);
+        const end   = start + val.length;
+        li.innerHTML =
+          escapeHtml(s.slice(0, start)) +
+          '<mark>' + escapeHtml(s.slice(start, end)) + '</mark>' +
+          escapeHtml(s.slice(end)) + checkHtml;
+      } else {
+        li.innerHTML = escapeHtml(s) + checkHtml;
+      }
+      li.onclick = () => ftAddTag(s);
+    }
+  });
+}
+
+function submitFreetext() {
+  const q = getCurrentQuestion();
+  const correctAnswers = window.freetextCorrectAnswers || [];
+  const numFields      = correctAnswers.length || 1;
+  const hint           = document.getElementById("freetextHint");
+
+  // Validate — just need at least 1 selection
+  if (ftSelectedTags.length === 0) {
+    const hint = document.getElementById("freetextHint");
+    if (hint) {
+      hint.innerText = "⚠️ Please select at least one answer";
+      hint.style.color = "var(--danger)";
+      setTimeout(() => { hint.innerText = ""; hint.style.color = ""; }, 2000);
+    }
+    const tagBox = document.getElementById("ftTagBox");
+    if (tagBox) {
+      tagBox.style.borderColor = "var(--danger)";
+      tagBox.style.boxShadow   = "0 0 0 3px rgba(192,57,43,0.15)";
+      setTimeout(() => { tagBox.style.borderColor = ""; tagBox.style.boxShadow = ""; }, 1200);
+    }
+    return;
+  }
+
+  if (hint) { hint.innerText = ""; hint.style.color = ""; }
+
+  // Disable
+  document.getElementById("freetextSubmit").disabled = true;
+  const si = document.getElementById("ftSearchInput");
+  if (si) si.disabled = true;
+  const list = document.getElementById("ftSuggestionList");
+  if (list) list.style.pointerEvents = "none";
+
+  // Score
+  const typed        = ftSelectedTags.map(t => t.toLowerCase());
+  const pointsPerField = 10 / numFields;
+  let correctCount   = 0;
+  const usedAnswers  = new Set();
+
+  typed.forEach(t => {
+    const matchIdx = correctAnswers.findIndex(
+      (ca, ci) => ca.toLowerCase() === t && !usedAnswers.has(ci)
+    );
+    if (matchIdx > -1) { usedAnswers.add(matchIdx); correctCount++; }
+  });
+
+  // Deduct for wrong selections — wrong answers cancel out correct ones
+  const wrongCount  = typed.length - correctCount;
+  const netCorrect  = Math.max(0, correctCount - wrongCount);
+  const pointsEarned = numFields > 0
+    ? Math.min(10, Math.round((netCorrect / numFields) * 10 * 10) / 10)
+    : 0;
+  score += pointsEarned;
+
+  // Colour tags green/red
+  const tagBox = document.getElementById("ftTagBox");
+  if (tagBox) {
+    tagBox.querySelectorAll("div").forEach(tag => {
+      const txt      = tag.querySelector("span")?.textContent || "";
+      const lower    = txt.toLowerCase();
+      const isCorrect = correctAnswers.some(ca => ca.toLowerCase() === lower);
+      tag.style.background  = isCorrect ? "rgba(92,45,126,0.15)" : "rgba(192,57,43,0.08)";
+      tag.style.borderColor = isCorrect ? "var(--accent)"        : "var(--danger)";
+      tag.style.color       = isCorrect ? "var(--accent)"        : "var(--danger)";
+    });
+    tagBox.style.borderColor = correctCount === numFields && wrongCount === 0 ? "var(--accent)" : "var(--danger)";
+    tagBox.style.boxShadow   = "none";
+  }
+
+  const allCorrect  = correctCount === numFields && wrongCount === 0;
+  const someCorrect = netCorrect > 0 && !allCorrect;
+
+  // Store for review
+  const ftKey = answerKey();
+  userAnswers[ftKey] = {
+    userAnswers:  typed,
+    isCorrect:    allCorrect,
+    pointsEarned,
+    isFreetext:   true
+  };
+
+  document.getElementById("feedbackIcon").innerText  = allCorrect ? "✅" : someCorrect ? "⚠️" : "❌";
+  document.getElementById("feedbackTitle").innerText = allCorrect ? "Correct!" : someCorrect ? "Partially Correct" : "Incorrect";
+  document.getElementById("scoreGained").innerText   = pointsEarned > 0 ? "+" + pointsEarned + " pts" : "+0 pts";
+  document.getElementById("scoreGained").style.color = pointsEarned > 0 ? "var(--accent)" : "var(--danger)";
+  document.getElementById("feedbackCorrectAnswer").innerText =
+    (numFields > 1 ? "Correct answers: " : "Correct answer: ") + correctAnswers.join(" / ");
+  document.getElementById("feedbackExplanation").innerText = q.explanation || "";
+
+  const c = cases[currentCaseIndex];
+  const nextPath = getNextPath();
+  const nextBtn  = document.getElementById("nextBtn");
+  if (nextBtn) {
+    if (nextPath) {
+      nextBtn.innerText = "Question " + nextPath.map(i => i+1).join(".") + " →";
+    } else if (currentCaseIndex < cases.length - 1) {
+      nextBtn.innerText = "Next Case →";
+    } else {
+      nextBtn.innerText = "See Results →";
+    }
+  }
+
+  presentFeedback();
+  // Unlock section Next after answered
+  const sNextBtn = document.getElementById("sectionNextBtn");
+  if (sNextBtn) { sNextBtn.disabled = false; sNextBtn.classList.remove("locked-until-answer"); }
+}
+
+// MULTI-SELECT SUBMIT
+// =======================
+
+function submitMultiSelect() {
+  if (!window.selectedCodes || window.selectedCodes.length === 0) {
+    const hint = document.getElementById("multiHint");
+    if (hint) {
+      hint.innerText = "⚠️ Please select at least one answer!";
+      hint.style.color = "var(--danger)";
+      setTimeout(() => {
+        hint.innerText = "Select all correct answers, then click Submit";
+        hint.style.color = "";
+      }, 1500);
+    }
+    return;
+  }
+
+  // Disable all buttons and submit
+  document.querySelectorAll(".answer-btn").forEach(btn => btn.disabled = true);
+  document.getElementById("submitMcBtn").disabled = true;
+  lockChipSelect();
+
+  const q = getCurrentQuestion();
+  const correctAnswers = q.correctAnswer.split(",").map(a => a.trim().toUpperCase());
+
+  // Calculate how many selected answers are correct
+  const correctSelected = window.selectedCodes.filter(c =>
+    correctAnswers.includes(c.toUpperCase())
+  );
+  const wrongSelected = window.selectedCodes.filter(c =>
+    !correctAnswers.includes(c.toUpperCase())
+  );
+
+  // Give partial points: points per correct answer selected, minus wrong selections
+  const pointsPerCorrect = Math.round(10 / correctAnswers.length);
+  const earned = Math.min(10, Math.max(0, (correctSelected.length * pointsPerCorrect) - (wrongSelected.length * pointsPerCorrect)));
+  score += earned;
+
+  const isCorrect = correctSelected.length > 0 && wrongSelected.length === 0;
+  const isPartial = correctSelected.length > 0 && (wrongSelected.length > 0 || correctSelected.length < correctAnswers.length);
+
+  // Store for review mode — use answerKey() so sub-questions get the right key
+  const msKey = answerKey();
+  userAnswers[msKey] = {
+    userAnswers: window.selectedCodes || [],
+    isCorrect:   isCorrect || isPartial,
+    pointsEarned: earned
+  };
+
+  // Show feedback
+  const feedbackIcon  = document.getElementById("feedbackIcon");
+  const feedbackTitle = document.getElementById("feedbackTitle");
+  const scoreGained   = document.getElementById("scoreGained");
+
+  if (isCorrect) {
+    feedbackIcon.innerText  = "✅";
+    feedbackTitle.innerText = "Correct!";
+  } else if (isPartial) {
+    feedbackIcon.innerText  = "⚠️";
+    feedbackTitle.innerText = "Partially Correct";
+  } else {
+    feedbackIcon.innerText  = "❌";
+    feedbackTitle.innerText = "Incorrect";
+  }
+
+  scoreGained.innerText = earned > 0 ? "+" + earned + " pts" : "+0 pts";
+  scoreGained.style.color = earned > 0 ? "var(--accent)" : "var(--danger)";
+
+  // Show correct answers
+  const correctLabels = correctAnswers.map(code => {
+    const opt = q.options.find(o => o.code === code);
+    return opt ? opt.label : code;
+  });
+  document.getElementById("feedbackCorrectAnswer").innerText =
+    "Correct answers: " + correctLabels.join(" / ");
+  document.getElementById("feedbackExplanation").innerText = q.explanation || "";
+
+  // Update next button — use getNextPath() to handle sub-questions correctly
+  const nextPath = getNextPath();
+  const nextBtn  = document.getElementById("nextBtn");
+  if (nextBtn) {
+    if (nextPath) {
+      nextBtn.innerText = "Question " + nextPath.map(i => i + 1).join(".") + " →";
+    } else if (currentCaseIndex < cases.length - 1) {
+      nextBtn.innerText = "Next Case →";
+    } else {
+      nextBtn.innerText = "See Results →";
+    }
+  }
+
+  presentFeedback();
+}
+
+// =======================
+// REVIEW MODE
+// =======================
+
+function goToReview() {
+  showScreen("review");
+  const container = document.getElementById("reviewContent");
+  container.innerHTML = "";
+
+  // ── Helper: get question object at a path within a case ──────────────────
+  function getQuestionAtPath(c, path) {
+    let q = c.questions[path[0]];
+    for (let i = 1; i < path.length; i++) q = (q.subQuestions || [])[path[i]];
+    return q;
+  }
+
+  // ── Collect all paths and compute overall stats ───────────────────────────
+  let totalEarned  = 0;
+  let totalMax     = 0;
+  let totalCorrect = 0;
+  let totalQs      = 0;
+
+  cases.forEach((c, ci) => {
+    getAllPaths(c.questions).forEach(path => {
+      const key = ci + "_" + path.join("_");
+      const ua  = userAnswers[key] || {};
+      totalEarned  += ua.pointsEarned || 0;
+      totalMax     += 10;
+      totalQs++;
+      if (ua.isCorrect) totalCorrect++;
+    });
+  });
+
+  const overallPct  = totalMax > 0 ? Math.round((totalEarned / totalMax) * 100) : 0;
+  const finalDisplay = Math.round(totalEarned * 10) / 10;
+
+  // ── Summary banner ─────────────────────────────────────────────────────────
+  const summary = document.createElement("div");
+  summary.className = "review-summary";
+  summary.innerHTML = `
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${finalDisplay} / ${totalMax}</div>
+      <div class="review-summary-lbl">Total points</div>
+    </div>
+    <div class="review-summary-divider"></div>
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${overallPct}%</div>
+      <div class="review-summary-lbl">Overall score</div>
+    </div>
+    <div class="review-summary-divider"></div>
+    <div class="review-summary-stat">
+      <div class="review-summary-num">${totalCorrect} / ${totalQs}</div>
+      <div class="review-summary-lbl">Correct</div>
+    </div>
+  `;
+  container.appendChild(summary);
+
+  // ── Per-case blocks ────────────────────────────────────────────────────────
+  cases.forEach((c, ci) => {
+    const allPaths = getAllPaths(c.questions);
+
+    // Case-level stats
+    let caseEarned = 0;
+    let caseMax    = 0;
+    allPaths.forEach(path => {
+      const key = ci + "_" + path.join("_");
+      const ua  = userAnswers[key] || {};
+      caseEarned += ua.pointsEarned || 0;
+      caseMax    += 10;
+    });
+    const casePct     = caseMax > 0 ? Math.round((caseEarned / caseMax) * 100) : 0;
+    const caseDisplay = Math.round(caseEarned * 10) / 10;
+
+    const caseDiv = document.createElement("div");
+    caseDiv.className = "review-case";
+
+    // Case header
+    const header = document.createElement("div");
+    header.className = "review-case-header";
+    header.innerHTML = "Case " + (ci + 1) + " — " + escapeHtml(c.intro || "");
+    caseDiv.appendChild(header);
+
+    // Case score bar
+    const statsBar = document.createElement("div");
+    statsBar.className = "review-case-stats";
+    statsBar.innerHTML = `
+      <div class="stats-bar-wrapper">
+        <div class="stats-label">Score</div>
+        <div class="stats-bar-track">
+          <div class="stats-bar-fill" style="width:${casePct}%"></div>
+        </div>
+      </div>
+      <div class="stats-score">${caseDisplay} / ${caseMax} pts</div>
+    `;
+    caseDiv.appendChild(statsBar);
+
+    // ── Render each question (including sub-questions) ─────────────────────
+    function renderQuestionRow(path, depth) {
+      const q   = getQuestionAtPath(c, path);
+      if (!q) return;
+      const key = ci + "_" + path.join("_");
+      const ua  = userAnswers[key] || {};
+      const num = path.map(i => i + 1).join(".");
+
+      // Correct answer labels
+      const correctCodes  = (q.correctAnswer || "").split(",").map(a => a.trim().toUpperCase());
+      const correctLabels = correctCodes.map(code => {
+        const opt = (q.options || []).find(o => o.code === code);
+        return opt ? opt.label : code;
+      }).filter(Boolean);
+
+      // User answer labels
+      const userAnswerList = (ua.userAnswers || []).map(a => {
+        if (ua.isFreetext) return a;
+        const opt = (q.options || []).find(o => o.code === String(a).toUpperCase());
+        return opt ? opt.label : a;
+      });
+
+      const notAnswered = userAnswerList.length === 0 || userAnswerList[0] === "—";
+      const isCorrect   = ua.isCorrect;
+      const pts         = ua.pointsEarned || 0;
+
+      const qDiv = document.createElement("div");
+      qDiv.className = "review-question";
+
+      // Indent sub-questions visually
+      if (depth > 0) {
+        qDiv.style.marginLeft  = (depth * 20) + "px";
+        qDiv.style.borderLeft  = "3px solid var(--border)";
+        qDiv.style.paddingLeft = "14px";
+        qDiv.style.background  = "var(--surface2)";
+        qDiv.style.borderRadius = "0 10px 10px 0";
+      }
+
+      // Sub-question label
+      const depthLabel = depth > 0
+        ? `<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-right:6px;">↳ Sub-Q</span>`
+        : "";
+
+      // Question text
+      const qText = document.createElement("div");
+      qText.className = "review-q-text";
+      qText.innerHTML = depthLabel + "Q" + num + ": " + escapeHtml(q.text || "");
+      qDiv.appendChild(qText);
+
+      // User answer row
+      const userRow = document.createElement("div");
+      userRow.className = "review-answer-row";
+      const userTag = document.createElement("span");
+      if (notAnswered) {
+        userTag.className = "review-tag user-bad";
+        userTag.innerText = "— Not answered";
+      } else {
+        userTag.className = "review-tag " + (isCorrect ? "user-ok" : "user-bad");
+        userTag.innerText = isCorrect ? "✅ Your answer" : "❌ Your answer";
+      }
+      const userVal = document.createElement("span");
+      userVal.innerText = notAnswered ? "" : userAnswerList.join(", ");
+      userRow.appendChild(userTag);
+      if (!notAnswered) userRow.appendChild(userVal);
+      qDiv.appendChild(userRow);
+
+      // Correct answer row (always show)
+      if (!isCorrect && correctLabels.length > 0) {
+        const correctRow = document.createElement("div");
+        correctRow.className = "review-answer-row";
+        const correctTag = document.createElement("span");
+        correctTag.className = "review-tag correct";
+        correctTag.innerText = "✓ Correct";
+        const correctVal = document.createElement("span");
+        correctVal.innerText = correctLabels.join(" / ");
+        correctRow.appendChild(correctTag);
+        correctRow.appendChild(correctVal);
+        qDiv.appendChild(correctRow);
+      }
+
+      // Points
+      const ptsEl = document.createElement("div");
+      ptsEl.className = "review-points";
+      ptsEl.innerText = "+" + pts + " / 10 pts";
+      ptsEl.style.color = pts >= 10 ? "var(--accent)" : pts > 0 ? "var(--warn)" : "var(--danger)";
+      qDiv.appendChild(ptsEl);
+
+      // Explanation
+      if (q.explanation) {
+        const exp = document.createElement("div");
+        exp.className = "review-explanation";
+        exp.innerText = q.explanation;
+        qDiv.appendChild(exp);
+      }
+
+      caseDiv.appendChild(qDiv);
+
+      // Render sub-questions recursively
+      (q.subQuestions || []).forEach((_, sIdx) => {
+        renderQuestionRow(path.concat(sIdx), depth + 1);
+      });
+    }
+
+    c.questions.forEach((_, qi) => renderQuestionRow([qi], 0));
+    container.appendChild(caseDiv);
+  });
+}
+
+
+
+// =======================
+// ADMIN PANEL
+// =======================
+
+function openAdmin() {
+  const pwd = document.getElementById("adminPassword");
+  if (!pwd) return;
+  const code = pwd.value.trim();
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "validateAdminCode", code: code })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.valid) { document.getElementById("adminError").style.display = "block"; return; }
+    document.getElementById("adminError").style.display = "none";
+    window.adminCode = code; // stash for live reveal admin calls
+    _adminCode = code;
+    showScreen("admin");
+    loadAdminData();
+  })
+  .catch(() => { document.getElementById("adminError").style.display = "block"; });
+}
+
+function loadAdminData() {
+  const statusEl = document.getElementById("adminStatus");
+  statusEl.innerText = "Loading data...";
+
+  // Set today as default dates
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 16);
+  const endDefault = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16);
+  const startInput  = document.getElementById("adminStartDate");
+  const endInput    = document.getElementById("adminEndDate");
+  const activeInput = document.getElementById("adminIsActive");
+  if (startInput) startInput.value = todayStr;
+  if (endInput)   endInput.value   = endDefault;
+
+  // Load current settings into form
+  loadCourseSettings().then(s => {
+    if (!s) return;
+    if (startInput && s.startDate) startInput.value = s.startDate.slice(0, 16);
+    if (endInput   && s.endDate)   endInput.value   = s.endDate.slice(0, 16);
+    if (activeInput) activeInput.checked = s.isActive !== false;
+
+    // Show course status badge
+    const statusEl = document.getElementById("adminCourseStatus");
+    if (statusEl) {
+      const access = checkCourseAccess();
+      if (access.allowed) {
+        statusEl.innerText = "🟢 Active";
+        statusEl.style.cssText = "font-size:12px;padding:3px 12px;border-radius:20px;font-weight:600;background:rgba(46,160,67,0.12);color:#2ea043;";
+      } else {
+        statusEl.innerText = "🔴 Closed";
+        statusEl.style.cssText = "font-size:12px;padding:3px 12px;border-radius:20px;font-weight:600;background:rgba(192,57,43,0.12);color:var(--danger);";
+      }
+    }
+  });
+
+  // Load all data from admin flow
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getAdminData" })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const scores   = Array.isArray(data.scores)   ? data.scores   : (data.scores?.value   || []);
+    const progress = Array.isArray(data.progress) ? data.progress : (data.progress?.value || []);
+
+    renderAdminStats(scores, progress);
+    renderAdminScores(scores);
+    renderAdminProgress(progress);
+    statusEl.innerText = "Last updated: " + new Date().toLocaleTimeString();
+  }).catch(err => {
+    statusEl.innerText = "Error loading data: " + err.message;
+  });
+}
+
+function renderAdminStats(scores, progress) {
+  const total     = scores.length;
+  const avg       = total > 0 ? (scores.reduce((s, r) => s + Number(r.Score || r.score || 0), 0) / total).toFixed(1) : 0;
+  const best      = total > 0 ? Math.max(...scores.map(r => Number(r.Score || r.score || 0))) : 0;
+  const inProgress = progress.filter(p => {
+    const ci = Number(p.CaseIndex || p.field_2 || 0);
+    return ci >= 0;
+  }).length;
+
+  document.getElementById("adminStatTotal").innerText    = total;
+  document.getElementById("adminStatAvg").innerText      = avg;
+  document.getElementById("adminStatBest").innerText     = best;
+  document.getElementById("adminStatProgress").innerText = inProgress;
+}
+
+let adminScoresData = [];
+let adminProgressData = [];
+
+function filterAdminScores() {
+  const q = (document.getElementById("adminSearchInput")?.value || "").toLowerCase().trim();
+  const filtered = q ? adminScoresData.filter(row => {
+    const name  = (row.Name || row.name || row.Title || row.field_1 || "").toLowerCase();
+    const email = (row.Email || row.email || row.field_2 || "").toLowerCase();
+    return name.includes(q) || email.includes(q);
+  }) : adminScoresData;
+  _renderScoreRows(filtered);
+}
+
+function renderAdminScores(scores) {
+  adminScoresData = scores;
+  _renderScoreRows(scores);
+}
+
+function _renderScoreRows(scores) {
+  const tbody = document.getElementById("adminScoresBody");
+  tbody.innerHTML = "";
+
+  if (scores.length === 0) {
+    tbody.innerHTML = "<tr><td colspan='4' style='text-align:center;color:var(--muted);padding:20px'>No results found</td></tr>";
+    return;
+  }
+  const sorted = [...scores].sort((a, b) => Number(b.Score || b.score || 0) - Number(a.Score || a.score || 0));
+  sorted.forEach((row, i) => {
+    const name  = row.Name  || row.name  || row.Title || row.field_1 || "—";
+    const email = row.Email || row.email || row.field_2 || "—";
+    const score = Number(row.Score || row.score || row.field_3 || 0);
+    const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1 + ".";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-size:16px">${medal}</td>
+      <td style="font-weight:500">${name}</td>
+      <td style="color:var(--muted);font-size:13px">${email}</td>
+      <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--accent)">${score} / 10</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderAdminProgress(progress) {
+  adminProgressData = progress;
+  const tbody = document.getElementById("adminProgressBody");
+  tbody.innerHTML = "";
+
+  const active = progress.filter(p => Number(p.CaseIndex || p.field_2 || 0) >= 0);
+
+  if (active.length === 0) {
+    tbody.innerHTML = "<tr><td colspan='3' style='text-align:center;color:var(--muted);padding:20px'>No one currently in progress</td></tr>";
+    return;
+  }
+
+  active.forEach(row => {
+    const name        = row.PlayerName    || row.field_1 || "—";
+    const email       = row.Title         || "—";
+    const caseIdx     = Number(row.CaseIndex     || row.field_2 || 0) + 1;
+    const questionIdx = Number(row.QuestionIndex || row.field_3 || 0) + 1;
+    const score       = Number(row.Score         || row.field_4 || 0);
+    if (Number(row.CaseIndex || row.field_2 || 0) === -1) return; // skip completed
+    const progressPct = Math.round((caseIdx / (cases.length || 5)) * 100);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-weight:500">${name}</td>
+      <td style="color:var(--muted);font-size:13px">${email}</td>
+      <td>
+        <span style="font-size:12px;background:rgba(92,45,126,0.1);color:var(--accent);padding:3px 10px;border-radius:20px;font-weight:600;">
+          Case ${caseIdx} · Q${questionIdx}
+        </span>
+      </td>
+      <td style="text-align:right;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--accent)">${score} pts</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function exportAdminCSV() {
+  // Build data directly from scores array for clean export
+  const headers = ["Rank", "Name", "Email", "Score"];
+  const dataRows = [];
+
+  const tbody = document.getElementById("adminScoresBody");
+  tbody.querySelectorAll("tr").forEach((tr, i) => {
+    const cells = tr.querySelectorAll("td");
+    if (cells.length >= 4) {
+      dataRows.push([
+        String(i + 1),
+        cells[1].innerText.trim(),
+        cells[2].innerText.trim(),
+        cells[3].innerText.trim().replace(" / 10", "")
+      ]);
+    }
+  });
+
+  // Build Excel-compatible CSV with semicolons and UTF-8 BOM
+  const bom = "\uFEFF";
+  const lines = [headers.join(";")];
+  dataRows.forEach(row => {
+    lines.push(row.map(v => `"${v.replace(/"/g, '""')}"`).join(";"));
+  });
+
+  const csv  = bom + lines.join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "radiology_results_" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAdminXLSX() {
+  if (!adminScoresData.length) { alert("No data to export."); return; }
+  const sorted = [...adminScoresData].sort((a,b) => Number(b.Score||b.score||0) - Number(a.Score||a.score||0));
+  const wsData = [["Rank","Name","Email","Score"]];
+  sorted.forEach((row,i) => {
+    wsData.push([i+1, row.Name||row.name||row.Title||"—", row.Email||row.email||"—", Number(row.Score||row.score||0)]);
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws["!cols"] = [{wch:6},{wch:30},{wch:35},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws, "Results");
+  XLSX.writeFile(wb, "radiology_results_" + new Date().toISOString().slice(0,10) + ".xlsx");
+}
+
+// =======================
+// COURSE SETTINGS
+// =======================
+
+let courseSettings = null;
+
+function loadCourseSettings() {
+  return fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getSettings" })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const rows = Array.isArray(data) ? data : (data.value || []);
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    courseSettings = {
+      startDate: row.StartDate || row.field_1 || null,
+      endDate:   row.EndDate   || row.field_2 || null,
+      isActive:  row.IsActive  !== undefined ? row.IsActive : true
+    };
+    return courseSettings;
+  })
+  .catch(err => {
+    console.error("Settings load error:", err);
+    return null;
+  });
+}
+
+function checkCourseAccess() {
+  if (!courseSettings) return { allowed: true };
+
+  const now   = new Date();
+  const start = courseSettings.startDate ? new Date(courseSettings.startDate) : null;
+  const end   = courseSettings.endDate   ? new Date(courseSettings.endDate)   : null;
+
+  if (!courseSettings.isActive) {
+    return { allowed: false, message: "This course is currently not available." };
+  }
+  if (start && now < start) {
+    return { allowed: false, message: "The course has not started yet.\n\nStart date: " + start.toLocaleDateString() + " " + start.toLocaleTimeString() };
+  }
+  if (end && now > end) {
+    return { allowed: false, message: "This course has ended.\n\nEnd date: " + end.toLocaleDateString() + " " + end.toLocaleTimeString() };
+  }
+  return { allowed: true };
+}
+
+function saveSettings() {
+  const startDate = document.getElementById("adminStartDate").value;
+  const endDate   = document.getElementById("adminEndDate").value;
+  const isActive  = document.getElementById("adminIsActive").checked;
+
+  const saveBody = {
+    action:    "saveSettings",
+    startDate: startDate,
+    endDate:   endDate,
+    isActive:  isActive
+  };
+  console.log("Saving settings:", JSON.stringify(saveBody));
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(saveBody)
+  })
+  .then(r => { console.log("Save status:", r.status); return r.json(); })
+  .then(data => { console.log("Save response:", JSON.stringify(data)); })
+  .then(() => {
+    courseSettings = { startDate, endDate, isActive };
+    const msg = document.getElementById("adminSettingsMsg");
+    if (msg) { msg.innerText = "✅ Settings saved!"; setTimeout(() => msg.innerText = "", 3000); }
+  })
+  .catch(err => console.error("Settings save error:", err));
+}
+
+// =======================
+// ADMIN TABS
+// =======================
+
+function switchAdminTab(tab) {
+  document.querySelectorAll(".admin-tab").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("onclick") === `switchAdminTab('${tab}')`);
+  });
+  document.querySelectorAll(".admin-panel").forEach(panel => {
+    panel.classList.remove("active");
+  });
+  const activePanel = document.getElementById("adminPanel" + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (activePanel) activePanel.classList.add("active");
+
+  if (tab === "timing") renderTimeAnalytics();
+}
+
+// =======================
+// SHARE RESULTS
+// =======================
+
+function downloadResultCard() {
+  const btn = document.getElementById("downloadCardBtn");
+  const card = document.getElementById("resultCardInner");
+  if (!card) { alert("Card not found."); return; }
+  btn.textContent = "⏳ Generating…"; btn.disabled = true;
+  html2canvas(card, { scale: 3, useCORS: true, backgroundColor: null, logging: false })
+    .then(canvas => {
+      const link = document.createElement("a");
+      link.download = "radiology-result.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+      btn.textContent = "📸 Download Card"; btn.disabled = false;
+    }).catch(() => { btn.textContent = "📸 Download Card"; btn.disabled = false; });
+}
+
+function getShareText() {
+  const score = window.finalScoreOutOf10 || 0;
+  const name  = playerName || "I";
+  return `${name} scored ${score}/10 on the EBR Radiology Challenge! 🩻 #Radiology #EDiR #EBR`;
+}
+
+function shareLinkedIn() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://www.linkedin.com/sharing/share-offsite/?url=https://www.myebr.org&summary=${text}`;
+  window.open(url, "_blank", "width=600,height=600");
+}
+
+function shareTwitter() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://twitter.com/intent/tweet?text=${text}`;
+  window.open(url, "_blank", "width=600,height=400");
+}
+
+function shareWhatsApp() {
+  const text = encodeURIComponent(getShareText());
+  const url  = `https://wa.me/?text=${text}`;
+  window.open(url, "_blank");
+}
+
+function copyToClipboard(text, btn, original) {
+  navigator.clipboard.writeText(text).then(() => {
+    if (btn) { btn.innerText = "✅ Copied!"; setTimeout(() => btn.innerText = original, 2000); }
+  }).catch(() => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (btn) { btn.innerText = "✅ Copied!"; setTimeout(() => btn.innerText = original, 2000); }
+  });
+}
+
+function copyResult() {
+  const btn = document.querySelector(".share-btn-copy");
+  copyToClipboard(getShareText(), btn, "📋 Copy");
+}
+
+
+// =======================
+// DR. RAY — AI RADIOLOGY TUTOR
+// =======================
+
+let tutorOpen = false;
+let tutorHistory = []; // conversation history
+let tutorTyping  = false;
+
+// Current case context (updated when question loads)
+let tutorContext = {
+  caseTitle: "", caseContent: "", questionText: "",
+  options: "", correctAnswer: "", userAnswer: "", explanation: ""
+};
+
+function updateTutorContext(ctx) {
+  tutorContext = { ...tutorContext, ...ctx };
+}
+
+function toggleTutor() {
+  tutorOpen ? closeTutor() : openTutor();
+}
+
+function openTutor() {
+  tutorOpen = true;
+  document.getElementById("tutorPanel").classList.add("open");
+  document.getElementById("tutorBadge").style.display = "none";
+  setTimeout(() => document.getElementById("tutorInput").focus(), 200);
+  scrollTutorToBottom();
+}
+
+function closeTutor() {
+  tutorOpen = false;
+  document.getElementById("tutorPanel").classList.remove("open");
+}
+
+function scrollTutorToBottom() {
+  const msgs = document.getElementById("tutorMessages");
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+}
+
+function addTutorMessage(text, role) {
+  const msgs = document.getElementById("tutorMessages");
+  const div = document.createElement("div");
+  div.className = "tutor-msg " + (role === "user" ? "user" : "dr");
+  div.innerHTML = text.replace(/\n/g, "<br>");
+  msgs.appendChild(div);
+  scrollTutorToBottom();
+  return div;
+}
+
+function sendSuggestion(text) {
+  document.getElementById("tutorInput").value = text;
+  sendTutorMessage();
+}
+
+async function sendTutorMessage() {
+  const input = document.getElementById("tutorInput");
+  const question = input.value.trim();
+  if (!question || tutorTyping) return;
+
+  input.value = "";
+  addTutorMessage(question, "user");
+
+  // Hide suggestions after first message
+  const suggestions = document.getElementById("tutorSuggestions");
+  if (suggestions) suggestions.style.display = "none";
+
+  // Add to history
+  tutorHistory.push({ role: "user", content: question });
+
+  // Show typing indicator
+  tutorTyping = true;
+  const sendBtn = document.getElementById("tutorSend");
+  if (sendBtn) sendBtn.disabled = true;
+  const typingDiv = addTutorMessage("Dr. Ray is thinking… 🩻", "dr typing");
+
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "askTutor",
+        question,
+        conversationHistory: tutorHistory.slice(-6), // last 3 exchanges
+        ...tutorContext
+      })
+    });
+
+    const data = await res.json();
+    typingDiv.remove();
+
+    const reply = data.reply || "Sorry, I couldn't respond right now. Please try again!";
+    addTutorMessage(reply, "dr");
+    tutorHistory.push({ role: "assistant", content: reply });
+
+  } catch (err) {
+    typingDiv.remove();
+    addTutorMessage("Oops! I had trouble connecting. Please check your connection and try again. 🩻", "dr");
+  }
+
+  tutorTyping = false;
+  if (sendBtn) sendBtn.disabled = false;
+  input.focus();
+}
+
+// Show badge when user answers (nudge to ask Dr. Ray)
+function notifyTutor(isCorrect) {
+  if (!tutorOpen) {
+    const badge = document.getElementById("tutorBadge");
+    if (badge) badge.style.display = isCorrect ? "none" : "flex";
+  }
+}
+
+// =======================
+// CONTENT MANAGER (GitHub backend)
+// =======================
+
+let cmCases         = [];
+let cmActiveCaseIdx = -1;
+let cmMode          = "";
+let cmEditTarget    = null;
+
+// ---- Helper: generate a simple unique id ----
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function cmNewId(prefix) {
+  return prefix + "_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+}
+
+// ---- Load from KV via Worker ----
+function cmRefresh() {
+  const list = document.getElementById("cmCaseList");
+  list.innerHTML = "<p style='color:var(--muted);font-size:13px;padding:16px;text-align:center;'>Loading…</p>";
+  document.getElementById("cmQuestionSection").style.display = "none";
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "getQuestions" })
+  })
+  .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+  .then(data => {
+    cmCases = (Array.isArray(data) ? data : [])
+      .sort((a,b) => (a.order||0) - (b.order||0))
+      .map(c => ({
+        id:        c.id        || cmNewId("case"),
+        order:     c.order     || 0,
+        title:     c.intro     || c.title   || "",
+        content:   c.content   || "",
+        imageType: c.imageType || "none",
+        imageUrl:  c.imageUrl  || "",
+        questions: (c.questions || [])
+          .sort((a,b) => (a.order||0)-(b.order||0))
+          .map(q => ({
+            id:            q.id            || cmNewId("q"),
+            order:         q.order         || 0,
+            text:          q.text          || "",
+            content:       q.content       || "",
+            questionType:  q.questionType  || "mc",
+            suggestions:   q.suggestions   || "",
+            fieldLabels:   q.fieldLabels   || "",
+            imageType:     q.imageType     || "none",
+            imageUrl:      q.imageUrl      || "",
+            options:       q.options       || [],
+            correctAnswer:    q.correctAnswer    || "",
+            explanation:      q.explanation      || "",
+            allowMultiSelect: q.allowMultiSelect !== undefined ? q.allowMultiSelect : null,
+            subQuestions:     q.subQuestions     || []
+          }))
+      }));
+    cmRenderCaseList();
+  })
+  .catch(err => {
+    list.innerHTML = `<p style='color:var(--danger);font-size:13px;padding:16px;text-align:center;'>
+      Failed to load: ${err.message}<br><br>
+      Make sure the COURSE_DATA KV namespace is bound to your Worker.
+    </p>`;
+  });
+}
+
+// ---- Save entire cmCases array to KV via Worker ----
+function cmSaveToGitHub(onSuccess) {  // name kept for compatibility
+  const btn = document.getElementById("cmModalSave");
+  if (btn) { btn.disabled = true; btn.innerText = "Saving…"; }
+  cmMsg("Saving…");
+
+  // Convert back to the questions.json format
+  const payload = cmCases.map(c => ({
+    id:        c.id,
+    order:     c.order,
+    intro:     c.title,
+    content:   c.content,
+    imageType: c.imageType || "none",
+    imageUrl:  c.imageUrl  || "",
+    questions: c.questions.map(q => ({
+      id:            q.id,
+      order:         q.order,
+      text:          q.text,
+      content:       q.content,
+      questionType:  q.questionType,
+      suggestions:   q.suggestions,
+      fieldLabels:   q.fieldLabels,
+      imageType:     q.imageType,
+      imageUrl:      q.imageUrl,
+      options:       q.options,
+      correctAnswer:    q.correctAnswer,
+      explanation:      q.explanation,
+      allowMultiSelect: q.allowMultiSelect !== undefined ? q.allowMultiSelect : null,
+      subQuestions:     q.subQuestions || []
+    }))
+  }));
+
+  console.log("Saving payload:", JSON.stringify(payload).slice(0, 500));
+
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "saveQuestions", questions: payload })
+  })
+  .then(r => {
+    if (!r.ok) {
+      return r.text().then(txt => { throw new Error("HTTP " + r.status + ": " + txt.slice(0,200)); });
+    }
+    return r.json();
+  })
+  .then(data => {
+    console.log("Save response:", data);
+    if (btn) { btn.disabled = false; btn.innerText = "💾 Save"; }
+    cmMsg("✅ Saved!");
+    // Also refresh the live cases array so course reflects changes immediately
+    cases = payload.map(c => ({
+      id:        c.id        || "",
+      order:     c.order     || 0,
+      intro:     c.intro     || c.title || "",
+      content:   c.content   || "",
+      imageType: (c.imageType || "none").toLowerCase(),
+      imageUrl:  c.imageUrl  || "",
+      questions: (c.questions || []).map(q => ({
+        id:            q.id            || "",
+        order:         q.order         || 0,
+        text:          q.text          || "",
+        content:       q.content       || "",
+        questionType:  q.questionType  || "mc",
+        suggestions:   q.suggestions   || "",
+        fieldLabels:   q.fieldLabels   || "",
+        imageType:     (q.imageType    || "none").toLowerCase(),
+        imageUrl:      q.imageUrl      || "",
+        options:       (q.options      || []).filter(o => o.label),
+        correctAnswer:    q.correctAnswer    || "",
+        explanation:      q.explanation      || "",
+        allowMultiSelect: q.allowMultiSelect !== undefined ? q.allowMultiSelect : null,
+        subQuestions:     q.subQuestions     || []
+      }))
+    }));
+    if (onSuccess) setTimeout(onSuccess, 600);
+  })
+  .catch(err => {
+    console.error("Save error:", err);
+    if (btn) { btn.disabled = false; btn.innerText = "💾 Save"; }
+    cmMsg("❌ Save failed: " + err.message, true);
+    alert("Save failed: " + err.message + "\n\nCheck the browser console (F12) for details.");
+  });
+}
+
+// ---- Render case list ----
+function cmRenderCaseList() {
+  const list = document.getElementById("cmCaseList");
+  if (cmCases.length === 0) {
+    list.innerHTML = "<p style='color:var(--muted);font-size:13px;padding:16px;text-align:center;'>No cases yet. Click + New Case to add one.</p>";
+    return;
+  }
+  list.innerHTML = "";
+  cmCases.forEach((c, idx) => {
+    const row = document.createElement("div");
+    row.className = "cm-case-row" + (cmActiveCaseIdx === idx ? " active" : "");
+    row.innerHTML = `
+      <span class="cm-case-num">#${idx+1}</span>
+      <span class="cm-case-title">${escapeHtml(c.title) || "<em style='color:var(--muted)'>Untitled</em>"}</span>
+      <span class="cm-case-meta">${c.questions.length} question${c.questions.length!==1?"s":""}</span>
+      <div class="cm-row-btns">
+        <button class="cm-btn" onclick="cmSelectCase(${idx});event.stopPropagation();">📋 Questions</button>
+        <button class="cm-btn" onclick="cmEditCase(${idx});event.stopPropagation();">✏️ Edit</button>
+        <button class="cm-btn" onclick="cmMoveCase(${idx},-1);event.stopPropagation();" ${idx===0?"disabled":""}>↑</button>
+        <button class="cm-btn" onclick="cmMoveCase(${idx},1);event.stopPropagation();" ${idx===cmCases.length-1?"disabled":""}>↓</button>
+        <button class="cm-btn cm-btn-danger" onclick="cmDeleteCase(${idx});event.stopPropagation();">🗑</button>
+      </div>`;
+    row.onclick = () => cmSelectCase(idx);
+    list.appendChild(row);
+  });
+}
+
+function cmMoveCase(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= cmCases.length) return;
+  [cmCases[idx], cmCases[newIdx]] = [cmCases[newIdx], cmCases[idx]];
+  cmCases.forEach((c, i) => c.order = i + 1);
+  if (cmActiveCaseIdx === idx) cmActiveCaseIdx = newIdx;
+  cmRenderCaseList();
+  cmSaveToGitHub(null);
+}
+
+// ---- Select case ----
+function cmSelectCase(idx) {
+  cmActiveCaseIdx = idx;
+  cmRenderCaseList();
+  const c = cmCases[idx];
+  document.getElementById("cmQSectionTitle").innerText = "Questions — " + (c.title || "Case " + (idx+1));
+  document.getElementById("cmQuestionSection").style.display = "block";
+  cmRenderQuestionList();
+}
+
+// ---- Render questions ----
+function cmRenderQuestionList() {
+  const list = document.getElementById("cmQuestionList");
+  const c = cmCases[cmActiveCaseIdx];
+  if (!c) return;
+  if (c.questions.length === 0) {
+    list.innerHTML = "<p style='color:var(--muted);font-size:13px;padding:16px;text-align:center;'>No questions yet. Click + New Question.</p>";
+    return;
+  }
+  list.innerHTML = "";
+  c.questions.forEach((q, qi) => {
+    const row = document.createElement("div");
+    row.className = "cm-q-row";
+    const typeBadge = q.questionType === "freetext" ? "Free text" : "Multiple choice";
+    const imgBadge  = q.imageType && q.imageType !== "none" ? "🖼 " + q.imageType : "";
+    row.innerHTML = `
+      <span class="cm-q-num">Q${qi+1}</span>
+      <div class="cm-q-body">
+        <div class="cm-q-text">${escapeHtml(q.text) || "<em style='color:var(--muted)'>No question text</em>"}</div>
+        <div class="cm-q-meta">
+          <span class="cm-badge">${typeBadge}</span>
+          ${imgBadge ? '<span class="cm-badge">'+imgBadge+'</span>' : ""}
+          ${q.correctAnswer ? '<span class="cm-badge">✓ '+escapeHtml(q.correctAnswer)+'</span>' : ""}
+        </div>
+      </div>
+      <div class="cm-row-btns">
+        <button class="cm-btn" onclick="cmMoveQuestion(${qi},-1);" ${qi===0?"disabled":""}>↑</button>
+        <button class="cm-btn" onclick="cmMoveQuestion(${qi},1);" ${qi===c.questions.length-1?"disabled":""}>↓</button>
+        <button class="cm-btn" onclick="cmEditQuestion(${qi});">✏️ Edit</button>
+        <button class="cm-btn cm-btn-danger" onclick="cmDeleteQuestion(${qi});">🗑</button>
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+function cmMoveQuestion(qi, dir) {
+  const c = cmCases[cmActiveCaseIdx];
+  const newQi = qi + dir;
+  if (newQi < 0 || newQi >= c.questions.length) return;
+  [c.questions[qi], c.questions[newQi]] = [c.questions[newQi], c.questions[qi]];
+  c.questions.forEach((q, i) => q.order = i + 1);
+  cmRenderQuestionList();
+  cmSaveToGitHub(null);
+}
+
+// ---- Case modal ----
+function cmNewCase() {
+  cmMode = "newCase"; cmEditTarget = null;
+  document.getElementById("cmModalTitle").innerText = "New Case";
+  document.getElementById("cmModalBody").innerHTML = cmCaseForm({});
+  document.getElementById("cmModalMsg").innerText = "";
+  document.getElementById("cmModal").style.display = "block";
+}
+
+function cmEditCase(idx) {
+  cmMode = "editCase"; cmEditTarget = { caseIdx: idx };
+  const c = cmCases[idx];
+  document.getElementById("cmModalTitle").innerText = "Edit Case";
+  document.getElementById("cmModalBody").innerHTML = cmCaseForm(c);
+  document.getElementById("cmModalMsg").innerText = "";
+  document.getElementById("cmModal").style.display = "block";
+}
+
+function cmCaseForm(c) {
+  const itype    = c.imageType || "none";
+  const isBase64 = c.imageUrl && c.imageUrl.startsWith("data:");
+  const urlValue = isBase64 ? "" : (c.imageUrl || "");
+
+  return `
+    <div class="cm-field">
+      <label class="cm-label">Case Title / Clinical Presentation</label>
+      <textarea class="cm-textarea" id="cmF_title" placeholder="e.g. 65-year-old male with chest pain and dyspnoea…" style="min-height:70px;">${escapeHtml(c.title||"")}</textarea>
+    </div>
+    <div class="cm-field">
+      <label class="cm-label">Additional Content (optional — extra clinical details, labs, etc.)</label>
+      <textarea class="cm-textarea" id="cmF_content" placeholder="Hypertensive for 10 years. O2 sat 91%…">${escapeHtml(c.content||"")}</textarea>
+    </div>
+
+    <div class="cm-field">
+      <label class="cm-label">Image Type</label>
+      <select class="cm-select" id="cmF_itype" onchange="cmToggleImageFields()" style="width:auto;">
+        <option value="none"  ${itype==="none" ?"selected":""}>No image</option>
+        <option value="dicom" ${itype==="dicom"?"selected":""}>DICOM (EBR viewer)</option>
+        <option value="image" ${itype==="image"?"selected":""}>Static image (jpg/png)</option>
+      </select>
+    </div>
+
+    <!-- Hidden field stores base64 data between renders -->
+    <input type="hidden" id="cmF_imageBase64" value="${isBase64 ? escapeHtml(c.imageUrl) : ""}">
+
+    <div id="cmImageSection" style="display:${itype!=="none"?"block":"none"}">
+      <div class="cm-field">
+        <label class="cm-label">${itype==="dicom"?"EBR Viewer URL":"Image URL or upload from laptop"}</label>
+
+        <div id="cmUploadArea" style="display:${itype==="image"?"block":"none"}">
+          <div onclick="document.getElementById('cmFileInput').click()" style="border:2px dashed var(--border);border-radius:10px;padding:16px;text-align:center;cursor:pointer;color:var(--muted);font-size:13px;margin-bottom:8px;transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+            📁 Click to upload image from your laptop<br>
+            <span style="font-size:11px;margin-top:4px;display:block;">JPG or PNG — auto-resized to max 1200px</span>
+          </div>
+          <input type="file" id="cmFileInput" accept="image/*" style="display:none" onchange="cmHandleFileUpload(this)">
+          <img id="cmUploadPreview" src="${isBase64 ? escapeHtml(c.imageUrl) : ""}" style="display:${isBase64?"block":"none"};width:100%;max-height:150px;object-fit:contain;border-radius:8px;border:1px solid var(--border);margin-bottom:8px;">
+          ${isBase64 ? `<div style="font-size:12px;color:var(--accent);padding:6px 8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">✅ Image already uploaded — upload a new one to replace it</div>` : ""}
+          <div style="text-align:center;font-size:12px;color:var(--muted);margin-bottom:6px;">— or paste a URL below —</div>
+        </div>
+
+        <input class="cm-input" id="cmF_imageUrl" value="${escapeHtml(urlValue)}" placeholder="${itype==="dicom"?"https://www.myebr.org/viewer/case123":"https://…"}" oninput="this.dataset.val=this.value">
+
+        <div id="cmImagePreviewArea" style="margin-top:8px;display:${itype==="dicom"&&c.imageUrl?"block":"none"}">
+          ${itype==="dicom"&&c.imageUrl?`<div style="font-size:12px;color:var(--muted);padding:8px;background:var(--surface2);border-radius:8px;">🖥️ DICOM will load as iframe in the course</div>`:""}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ---- Question modal ----
+function cmNewQuestion() {
+  if (cmActiveCaseIdx < 0) return;
+  cmMode = "newQuestion"; cmEditTarget = { caseIdx: cmActiveCaseIdx };
+  document.getElementById("cmModalTitle").innerText = "New Question";
+  document.getElementById("cmModalBody").innerHTML = cmQuestionForm({});
+  document.getElementById("cmModalMsg").innerText = "";
+  document.getElementById("cmModal").style.display = "block";
+  cmBuildFtAnswerList("");
+  cmBuildSubQuestionList([]);
+}
+
+function cmEditQuestion(qi) {
+  const q = cmCases[cmActiveCaseIdx].questions[qi];
+  cmMode = "editQuestion"; cmEditTarget = { caseIdx: cmActiveCaseIdx, questionIdx: qi };
+  document.getElementById("cmModalTitle").innerText = "Edit Question";
+  document.getElementById("cmModalBody").innerHTML = cmQuestionForm(q);
+  document.getElementById("cmModalMsg").innerText = "";
+  document.getElementById("cmModal").style.display = "block";
+  if (q.questionType === "freetext") cmBuildFtAnswerList(q.correctAnswer || "");
+  cmBuildSubQuestionList(q.subQuestions || []);
+  cmInitQuestionForm(q);
+}
+
+function cmQuestionForm(q) {
+  const opts = ["A","B","C","D","E","F"];
+  const existing = q.options || [];
+  const optRows = opts.map((code, i) => {
+    const val = existing[i] ? existing[i].label : "";
+    return `<div class="cm-option-row">
+      <span class="cm-option-code">${code}</span>
+      <input class="cm-input" id="cmF_opt${code}" value="${escapeHtml(val)}" placeholder="Option ${code}…">
+    </div>`;
+  }).join("");
+
+  const qtype = q.questionType || "mc";
+  const itype = q.imageType    || "none";
+
+  return `
+    <div class="cm-field">
+      <label class="cm-label">Question Text</label>
+      <textarea class="cm-textarea" id="cmF_text" placeholder="What is the most likely diagnosis?">${escapeHtml(q.text||"")}</textarea>
+    </div>
+    <div class="cm-field">
+      <label class="cm-label">Clinical Content (optional — extra text shown in the question box)</label>
+      <textarea class="cm-textarea" id="cmF_content" style="min-height:60px;" placeholder="Additional clinical details shown below the question…">${escapeHtml(q.content||"")}</textarea>
+    </div>
+
+    <div class="cm-grid2">
+      <div class="cm-field">
+        <label class="cm-label">Question Type</label>
+        <select class="cm-select" id="cmF_qtype" onchange="cmToggleFreetextFields()">
+          <option value="mc"      ${qtype==="mc"?"selected":""}>Multiple Choice</option>
+          <option value="freetext"${qtype==="freetext"?"selected":""}>Free Text</option>
+        </select>
+      </div>
+      <div class="cm-field">
+        <label class="cm-label">Image Type</label>
+        <select class="cm-select" id="cmF_itype" onchange="cmToggleImageFields()">
+          <option value="none"  ${itype==="none" ?"selected":""}>No image</option>
+          <option value="dicom" ${itype==="dicom"?"selected":""}>DICOM (EBR viewer)</option>
+          <option value="image" ${itype==="image"?"selected":""}>Static image (URL)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Allow multi-select — only shown for MC questions -->
+    <div id="cmMultiSelectSection" style="display:${qtype==="freetext"?"none":"block"}">
+      <div class="cm-field">
+        <label class="cm-label">Answer Selection Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:2px solid ${q.allowMultiSelect===false?"var(--accent)":"var(--border)"};background:${q.allowMultiSelect===false?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:14px;font-family:'DM Sans',sans-serif;transition:all 0.15s;">
+            <input type="radio" name="cmF_multiSelect" id="cmF_single" value="single" ${q.allowMultiSelect===false?"checked":""} onchange="cmUpdateSelectionMode()" style="accent-color:var(--accent);">
+            <div>
+              <div style="font-weight:600;">Single answer</div>
+              <div style="font-size:11px;color:var(--muted);">First click submits</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:2px solid ${q.allowMultiSelect===true?"var(--accent)":"var(--border)"};background:${q.allowMultiSelect===true?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:14px;font-family:'DM Sans',sans-serif;transition:all 0.15s;">
+            <input type="radio" name="cmF_multiSelect" id="cmF_multi" value="multi" ${q.allowMultiSelect===true?"checked":""} onchange="cmUpdateSelectionMode()" style="accent-color:var(--accent);">
+            <div>
+              <div style="font-weight:600;">Multiple answers</div>
+              <div style="font-size:11px;color:var(--muted);">Candidate selects then submits</div>
+            </div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden field stores base64 data between renders -->
+    <input type="hidden" id="cmF_imageBase64" value="${q.imageUrl&&q.imageUrl.startsWith("data:") ? escapeHtml(q.imageUrl) : ""}">
+
+    <!-- Image URL / Upload -->
+    <div id="cmImageSection" style="display:${itype!=="none"?"block":"none"}">
+      <div class="cm-field">
+        <label class="cm-label">${itype==="dicom"?"EBR Viewer URL (paste your platform link)":"Image URL or upload from laptop"}</label>
+
+        <div id="cmUploadArea" style="display:${itype==="image"?"block":"none"}">
+          <!-- Upload button -->
+          <div onclick="document.getElementById('cmFileInput').click()" style="border:2px dashed var(--border);border-radius:10px;padding:16px;text-align:center;cursor:pointer;color:var(--muted);font-size:13px;margin-bottom:8px;transition:border-color 0.2s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+            📁 Click to upload image from your laptop<br>
+            <span style="font-size:11px;margin-top:4px;display:block;">JPG or PNG — auto-resized to max 1200px</span>
+          </div>
+          <input type="file" id="cmFileInput" accept="image/*" style="display:none" onchange="cmHandleFileUpload(this)">
+          <img id="cmUploadPreview" src="${q.imageUrl&&q.imageUrl.startsWith("data:")?escapeHtml(q.imageUrl):""}" style="display:${q.imageUrl&&q.imageUrl.startsWith("data:")?"block":"none"};width:100%;max-height:150px;object-fit:contain;border-radius:8px;border:1px solid var(--border);margin-bottom:8px;">
+          ${q.imageUrl&&q.imageUrl.startsWith("data:") ? `<div style="font-size:12px;color:var(--accent);padding:6px 8px;background:var(--surface2);border-radius:8px;margin-bottom:6px;">✅ Image already uploaded — upload a new one to replace it</div>` : ""}
+          <div style="text-align:center;font-size:12px;color:var(--muted);margin-bottom:6px;">— or paste a URL below —</div>
+        </div>
+
+        <input class="cm-input" id="cmF_imageUrl" value="${escapeHtml(q.imageUrl&&!q.imageUrl.startsWith("data:")?q.imageUrl:"")}" placeholder="${itype==="dicom"?"https://www.myebr.org/viewer/case123":"https://…"}" oninput="this.dataset.val=this.value">
+
+        <!-- Existing image preview -->
+        <div id="cmImagePreviewArea" style="margin-top:8px;display:${itype!=="none"&&q.imageUrl?"block":"none"}">
+          ${itype==="dicom"&&q.imageUrl ? `<div style="font-size:12px;color:var(--muted);padding:8px;background:var(--surface2);border-radius:8px;">🖥️ DICOM will load as iframe in the course</div>` : ""}
+          ${itype==="image"&&q.imageUrl&&!q.imageUrl.startsWith("data:") ? `<img src="${escapeHtml(q.imageUrl)}" style="width:100%;max-height:120px;object-fit:contain;border-radius:8px;border:1px solid var(--border);">` : ""}
+          ${itype==="image"&&q.imageUrl&&q.imageUrl.startsWith("data:") ? `<div style="font-size:12px;color:var(--accent);padding:8px;background:var(--surface2);border-radius:8px;">✅ Uploaded image stored</div>` : ""}
+        </div>
+      </div>
+    </div>
+
+    <!-- MC options -->
+    <div id="cmMcSection" style="display:${qtype==="freetext"?"none":"block"}">
+      <div class="cm-field">
+        <label class="cm-label">Answer Options</label>
+        ${optRows}
+      </div>
+    </div>
+
+    <!-- Freetext fields -->
+    <div id="cmFtSection" style="display:${qtype==="freetext"?"block":"none"}">
+      <div class="cm-field">
+        <label class="cm-label">Suggestions Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${!cmIsCascading(q)?"var(--accent)":"var(--border)"};background:${!cmIsCascading(q)?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmF_sugMode" value="flat" ${!cmIsCascading(q)?"checked":""} onchange="cmToggleSugMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Simple list</div><div style="font-size:11px;color:var(--muted);">Flat list of options</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${cmIsCascading(q)?"var(--accent)":"var(--border)"};background:${cmIsCascading(q)?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmF_sugMode" value="cascading" ${cmIsCascading(q)?"checked":""} onchange="cmToggleSugMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Cascading</div><div style="font-size:11px;color:var(--muted);">Category → specific options</div></div>
+          </label>
+        </div>
+        <div id="cmFlatSugSection" style="display:${!cmIsCascading(q)?"block":"none"}">
+          <input class="cm-input" id="cmF_suggestions" value="${escapeHtml(!cmIsCascading(q)?q.suggestions||"":"")}" placeholder="Non-contrast CT, Contrast-enhanced CT, MRI Brain…">
+        </div>
+        <div id="cmCascadingSugSection" style="display:${cmIsCascading(q)?"block":"none"}">
+          <div id="cmCascadeItems" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;"></div>
+          <button type="button" onclick="cmAddCascadeItem()" style="padding:7px 16px;border-radius:8px;border:1px dashed var(--border);background:none;color:var(--accent);font-size:13px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;width:100%;">+ Add category</button>
+          <input type="hidden" id="cmF_suggestions" value="${escapeHtml(cmIsCascading(q)?q.suggestions||"":"")}">
+        </div>
+      </div>
+      <div class="cm-field">
+        <label class="cm-label">Answer Selection Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:2px solid ${q.allowMultiSelect===false?"var(--accent)":"var(--border)"};background:${q.allowMultiSelect===false?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:14px;font-family:'DM Sans',sans-serif;transition:all 0.15s;">
+            <input type="radio" name="cmF_multiSelect" value="single" ${q.allowMultiSelect===false?"checked":""} onchange="cmUpdateSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Single answer</div><div style="font-size:11px;color:var(--muted);">One selection only</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:2px solid ${q.allowMultiSelect===true?"var(--accent)":"var(--border)"};background:${q.allowMultiSelect===true?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:14px;font-family:'DM Sans',sans-serif;transition:all 0.15s;">
+            <input type="radio" name="cmF_multiSelect" value="multi" ${q.allowMultiSelect===true?"checked":""} onchange="cmUpdateSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Multiple answers</div><div style="font-size:11px;color:var(--muted);">Candidate selects one or more</div></div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-field" id="cmCorrectAnswerSection">
+      <label class="cm-label">Correct Answer(s)</label>
+
+      <!-- MC: simple letter selector -->
+      <div id="cmCorrectMc" style="display:${qtype!=="freetext"?"block":"none"}">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Click to select the correct answer(s)</div>
+        <div id="cmMcCorrectBtns" style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${["A","B","C","D","E","F"].map(code => {
+            return `<button type="button" id="cmCorrectBtn_${code}" onclick="cmToggleCorrectBtn('${code}')"
+              style="padding:8px 18px;border-radius:8px;border:2px solid var(--border);
+              background:var(--surface2);color:var(--text);font-weight:400;
+              font-family:'DM Sans',sans-serif;font-size:14px;cursor:pointer;transition:all 0.15s;">
+              ${code}
+            </button>`;
+          }).join("")}
+        </div>
+        <input type="hidden" id="cmF_correct" value="">
+        <div style="font-size:12px;color:var(--muted);margin-top:8px;">Previously saved: <strong>${escapeHtml(q.correctAnswer||"none")}</strong> — click above to set new value</div>
+      </div>
+
+      <!-- Freetext: dynamic list OR cascading plain text -->
+      <div id="cmCorrectFt" style="display:${qtype==="freetext"?"block":"none"}">
+
+        <!-- Standard freetext answer boxes -->
+        <div id="cmCorrectFtStandard" style="display:${cmIsCascading(q)?"none":"block"}">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+            Add one correct answer per box — each gets its own input field in the course.
+          </div>
+          <div id="cmFtAnswerList"></div>
+          <button type="button" onclick="cmAddFtAnswer()" style="margin-top:6px;padding:7px 16px;border-radius:8px;border:1px dashed var(--border);background:none;color:var(--accent);font-size:13px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;width:100%;">+ Add another answer</button>
+        </div>
+
+        <!-- Cascading correct answer — plain text -->
+        <div id="cmCorrectFtCascading" style="display:${cmIsCascading(q)?"block":"none"}">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+            Enter the full correct answer(s) — the complete combined string the candidate must select.<br>
+            e.g. <strong>Peripheral edema</strong> or <strong>Peripheral edema, Central fibrosis</strong> for multiple
+          </div>
+          <input class="cm-input" id="cmF_cascadeCorrect" value="${escapeHtml(q.correctAnswer||"")}" placeholder="Peripheral edema, Central fibrosis…">
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;">Separate multiple correct answers with a comma</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-field">
+      <label class="cm-label">Explanation (shown after the user answers)</label>
+      <textarea class="cm-textarea" id="cmF_explanation" placeholder="Explain why this is the correct answer…">${escapeHtml(q.explanation||"")}</textarea>
+    </div>
+
+    <div class="cm-field" style="margin-top:8px;">
+      <label class="cm-label" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Sub-questions <span style="font-weight:400;color:var(--muted);">(appear after this question is answered)</span></span>
+        <button type="button" onclick="cmAddSubQuestion()" style="padding:5px 12px;border-radius:8px;border:1px dashed var(--border);background:none;color:var(--accent);font-size:12px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;">+ Add sub-question</button>
+      </label>
+      <div id="cmSubQuestionList" style="margin-top:8px;display:flex;flex-direction:column;gap:8px;"></div>
+    </div>`;
+}
+
+// ---- MC correct answer toggle ----
+function cmToggleCorrectBtn(code) {
+  const btn     = document.getElementById("cmCorrectBtn_" + code);
+  const hidden  = document.getElementById("cmF_correct");
+  if (!btn || !hidden) return;
+
+  let current = hidden.value.split(",").map(a => a.trim().toUpperCase()).filter(a => a);
+  const idx   = current.indexOf(code);
+
+  if (idx > -1) {
+    current.splice(idx, 1);
+    btn.style.border     = "2px solid var(--border)";
+    btn.style.background = "var(--surface2)";
+    btn.style.color      = "var(--text)";
+    btn.style.fontWeight = "400";
+    btn.innerText        = code;
+  } else {
+    current.push(code);
+    btn.style.border     = "2px solid var(--accent)";
+    btn.style.background = "rgba(92,45,126,0.12)";
+    btn.style.color      = "var(--accent)";
+    btn.style.fontWeight = "700";
+    btn.innerText        = code + " ✓";
+  }
+  hidden.value = current.join(",");
+}
+
+// ---- Freetext: build answer rows ----
+function cmBuildFtAnswerList(correctAnswer) {
+  const list = document.getElementById("cmFtAnswerList");
+  if (!list) return;
+  list.innerHTML = "";
+  const answers = correctAnswer
+    ? correctAnswer.split(",").map(a => a.trim()).filter(a => a)
+    : [""];
+  answers.forEach(a => cmAddFtAnswer(a));
+}
+
+function cmAddFtAnswer(value) {
+  const list = document.getElementById("cmFtAnswerList");
+  if (!list) return;
+  const row = document.createElement("div");
+  row.className = "cm-option-row";
+  row.style.marginBottom = "8px";
+  const idx = list.children.length + 1;
+  row.innerHTML = `
+    <span style="font-size:12px;font-weight:700;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:20px;">${idx}</span>
+    <input class="cm-input cm-ft-answer" value="${escapeHtml(value||"")}" placeholder="e.g. CT Chest" style="flex:1;">
+    <button type="button" onclick="this.parentElement.remove();cmRenumberFtAnswers();" style="padding:5px 10px;border-radius:7px;border:1px solid var(--danger);background:none;color:var(--danger);cursor:pointer;font-size:13px;">✕</button>`;
+  list.appendChild(row);
+}
+
+function cmRenumberFtAnswers() {
+  const list = document.getElementById("cmFtAnswerList");
+  if (!list) return;
+  Array.from(list.children).forEach((row, i) => {
+    const num = row.querySelector("span");
+    if (num) num.innerText = i + 1;
+  });
+}
+
+// ---- Get correct answer value from form ----
+function cmGetCorrectAnswer() {
+  const qtype   = document.getElementById("cmF_qtype").value;
+  const sugMode = document.querySelector("input[name='cmF_sugMode']:checked")?.value;
+
+  if (qtype === "freetext") {
+    // Cascading mode — read from plain text input
+    if (sugMode === "cascading") {
+      const cascInput = document.getElementById("cmF_cascadeCorrect");
+      return cascInput ? cascInput.value.trim() : "";
+    }
+    // Standard freetext — read from answer boxes
+    const inputs = document.querySelectorAll(".cm-ft-answer");
+    return Array.from(inputs).map(i => i.value.trim()).filter(v => v).join(",");
+  } else {
+    const hidden = document.getElementById("cmF_correct");
+    return hidden ? hidden.value : "";
+  }
+}
+
+function cmUpdateSelectionMode() {
+  document.querySelectorAll("input[name='cmF_multiSelect']").forEach(radio => {
+    const lbl = radio.closest("label");
+    if (!lbl) return;
+    lbl.style.borderColor = radio.checked ? "var(--accent)"         : "var(--border)";
+    lbl.style.background  = radio.checked ? "rgba(92,45,126,0.08)" : "var(--surface2)";
+  });
+}
+
+function cmToggleFreetextFields() {
+  const isFt = document.getElementById("cmF_qtype").value === "freetext";
+  document.getElementById("cmFtSection").style.display          = isFt ? "block" : "none";
+  document.getElementById("cmMcSection").style.display          = isFt ? "none"  : "block";
+  document.getElementById("cmCorrectMc").style.display          = isFt ? "none"  : "block";
+  document.getElementById("cmCorrectFt").style.display          = isFt ? "block" : "none";
+  const multiSel = document.getElementById("cmMultiSelectSection");
+  if (multiSel) multiSel.style.display = isFt ? "none" : "block";
+  if (isFt) {
+    const existing = document.getElementById("cmF_correct");
+    cmBuildFtAnswerList(existing ? existing.value : "");
+  }
+}
+
+function cmToggleImageFields() {
+  const itype = document.getElementById("cmF_itype").value;
+  document.getElementById("cmImageSection").style.display = itype !== "none" ? "block" : "none";
+  const uploadArea = document.getElementById("cmUploadArea");
+  if (uploadArea) uploadArea.style.display = itype === "image" ? "block" : "none";
+  const lbl = document.querySelector("#cmImageSection .cm-label");
+  if (lbl) lbl.innerText = itype === "dicom" ? "EBR Viewer URL (paste your platform link)" : "Image URL or upload from laptop";
+  const inp = document.getElementById("cmF_imageUrl");
+  if (inp) {
+    inp.placeholder = itype === "dicom" ? "https://www.myebr.org/viewer/case123" : "https://…";
+    inp.disabled = false; // always enable when switching type
+    if (itype === "dicom") inp.focus(); // auto-focus for DICOM so user can paste immediately
+  }
+}
+
+function cmHandleFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const preview  = document.getElementById("cmUploadPreview");
+  const urlInput = document.getElementById("cmF_imageUrl");
+  const b64Input = document.getElementById("cmF_imageBase64");
+
+  if (preview)  preview.style.display = "none";
+  if (urlInput) { urlInput.value = "Processing image…"; urlInput.disabled = true; }
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const b64 = canvas.toDataURL("image/jpeg", 0.85);
+
+      // Store in hidden field — this is what gets saved
+      if (b64Input) b64Input.value = b64;
+
+      // Clear the URL field — image is uploaded, not from URL
+      if (urlInput) { urlInput.value = ""; urlInput.disabled = false; urlInput.placeholder = "(uploaded image)"; }
+
+      // Show preview
+      if (preview) { preview.src = b64; preview.style.display = "block"; }
+
+      cmMsg("✅ Image ready — click Save to store it");
+    };
+    img.onerror = () => {
+      if (urlInput) { urlInput.value = ""; urlInput.disabled = false; }
+      cmMsg("Could not read image file", true);
+    };
+    img.src = ev.target.result;
+  };
+  reader.onerror = () => {
+    if (urlInput) { urlInput.value = ""; urlInput.disabled = false; }
+    cmMsg("Could not read file", true);
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---- Close modal ----
+function cmCloseModal() {
+  document.getElementById("cmModal").style.display = "none";
+}
+
+function cmMsg(txt, isError) {
+  const el = document.getElementById("cmModalMsg");
+  if (el) { el.innerText = txt; el.style.color = isError ? "var(--danger)" : "var(--accent)"; }
+}
+
+// ---- Save dispatcher ----
+function cmSave() {
+  if      (cmMode === "newCase")      cmSaveCase(false);
+  else if (cmMode === "editCase")     cmSaveCase(true);
+  else if (cmMode === "newQuestion")  cmSaveQuestion(false);
+  else if (cmMode === "editQuestion") cmSaveQuestion(true);
+}
+
+// ---- Save Case ----
+function cmSaveCase(isEdit) {
+  const title    = document.getElementById("cmF_title").value.trim();
+  const content  = document.getElementById("cmF_content").value.trim();
+  const itype    = document.getElementById("cmF_itype") ? document.getElementById("cmF_itype").value : "none";
+  const _urlEl = document.getElementById("cmF_imageUrl");
+  const urlField = _urlEl ? (_urlEl.value.trim() || _urlEl.dataset.val || "").trim() : "";
+  const b64Field = document.getElementById("cmF_imageBase64") ? document.getElementById("cmF_imageBase64").value : "";
+
+  if (!title) { cmMsg("Please enter a title.", true); return; }
+  if (itype === "dicom" && !urlField && !b64Field) {
+    cmMsg("Please enter the EBR Viewer URL for the DICOM image.", true);
+    const inp = document.getElementById("cmF_imageUrl");
+    if (inp) { inp.focus(); inp.style.borderColor = "var(--danger)"; setTimeout(() => inp.style.borderColor = "", 2000); }
+    return;
+  }
+
+  // Use uploaded base64 if available (images only), then typed URL, then keep existing on edit
+  let imageUrl = isEdit ? (cmCases[cmEditTarget.caseIdx].imageUrl || "") : "";
+  if (itype !== "none") {
+    if (itype !== "dicom" && b64Field && b64Field.startsWith("data:")) {
+      imageUrl = b64Field;
+    } else if (urlField && urlField.trim() && !urlField.startsWith("(")) {
+      imageUrl = urlField.trim();
+    }
+    // else keep existing (already set above)
+  } else {
+    imageUrl = "";
+  }
+
+  if (isEdit) {
+    const c = cmCases[cmEditTarget.caseIdx];
+    c.title     = title;
+    c.content   = content;
+    c.imageType = itype;
+    c.imageUrl  = imageUrl;
+  } else {
+    cmCases.push({
+      id:        cmNewId("case"),
+      order:     cmCases.length + 1,
+      title, content,
+      imageType: itype,
+      imageUrl,
+      questions: []
+    });
+  }
+
+  cmSaveToGitHub(() => {
+    cmCloseModal();
+    cmRenderCaseList();
+    if (isEdit && cmActiveCaseIdx === cmEditTarget.caseIdx) {
+      document.getElementById("cmQSectionTitle").innerText = "Questions — " + title;
+    }
+  });
+}
+
+// ---- Save Question ----
+function cmSaveQuestion(isEdit) {
+  const text           = document.getElementById("cmF_text").value.trim();
+  const content        = document.getElementById("cmF_content").value.trim();
+  const qtype          = document.getElementById("cmF_qtype").value;
+  const newCorrect     = cmGetCorrectAnswer();
+  // Fall back to existing correct answer if nothing new selected (editing mode)
+  const correct        = newCorrect || (isEdit ? (cmCases[cmEditTarget.caseIdx].questions[cmEditTarget.questionIdx].correctAnswer || "") : "");
+  const explanation    = document.getElementById("cmF_explanation").value.trim();
+  const sugMode    = document.querySelector("input[name='cmF_sugMode']:checked")?.value || "flat";
+  const suggestions = sugMode === "cascading"
+    ? (document.getElementById("cmF_suggestions") ? document.getElementById("cmF_suggestions").value.trim() : "")
+    : (document.getElementById("cmF_suggestions") ? document.getElementById("cmF_suggestions").value.trim() : "");
+  const fieldLabels    = document.getElementById("cmF_fieldLabels") ? document.getElementById("cmF_fieldLabels").value.trim() : "";
+  const itype          = document.getElementById("cmF_itype").value;
+  const _urlElQ = document.getElementById("cmF_imageUrl");
+  const urlField       = _urlElQ ? (_urlElQ.value.trim() || _urlElQ.dataset.val || "").trim() : "";
+  const b64Field       = document.getElementById("cmF_imageBase64") ? document.getElementById("cmF_imageBase64").value : "";
+  const multiRadio = document.querySelector("input[name='cmF_multiSelect']:checked");
+  const allowMultiSel = multiRadio
+    ? multiRadio.value === "multi"
+    : isEdit
+      ? (cmCases[cmEditTarget.caseIdx].questions[cmEditTarget.questionIdx].allowMultiSelect ?? null)
+      : null;
+
+  if (!text)    { cmMsg("Please enter the question text.", true); return; }
+  if (!correct) { cmMsg("Please select the correct answer.", true); return; }
+  if (itype === "dicom" && !urlField && !b64Field && !(isEdit && cmCases[cmEditTarget.caseIdx].questions[cmEditTarget.questionIdx].imageUrl)) {
+    cmMsg("Please enter the EBR Viewer URL for the DICOM image.", true);
+    const inp = document.getElementById("cmF_imageUrl");
+    if (inp) { inp.focus(); inp.style.borderColor = "var(--danger)"; setTimeout(() => inp.style.borderColor = "", 2000); }
+    return;
+  }
+
+  // Resolve imageUrl — prefer uploaded base64 (images only), then typed URL, then always keep existing on edit
+  let imageUrl = isEdit ? (cmCases[cmEditTarget.caseIdx].questions[cmEditTarget.questionIdx].imageUrl || "") : "";
+  if (itype !== "none") {
+    if (itype !== "dicom" && b64Field && b64Field.startsWith("data:")) {
+      imageUrl = b64Field;
+    } else if (urlField && urlField.trim() && !urlField.startsWith("(")) {
+      imageUrl = urlField.trim();
+    }
+    // else keep existing (already set above)
+  } else {
+    imageUrl = "";
+  }
+
+  const options = ["A","B","C","D","E","F"].map(code => ({
+    code,
+    label: (document.getElementById("cmF_opt"+code) ? document.getElementById("cmF_opt"+code).value.trim() : "")
+  })).filter(o => o.label);
+
+  const c = cmCases[cmEditTarget.caseIdx];
+
+  if (isEdit) {
+    const q = c.questions[cmEditTarget.questionIdx];
+    Object.assign(q, { text, content, questionType: qtype, suggestions, fieldLabels, imageType: itype, imageUrl, options, correctAnswer: correct, explanation, allowMultiSelect: allowMultiSel, subQuestions: JSON.parse(JSON.stringify(cmSubQuestions)) });
+  } else {
+    c.questions.push({
+      id:              cmNewId("q"),
+      order:           c.questions.length + 1,
+      text, content,
+      questionType:    qtype,
+      suggestions,     fieldLabels,
+      imageType:       itype,
+      imageUrl,
+      options,
+      correctAnswer:   correct,
+      explanation,
+      allowMultiSelect: allowMultiSel,
+      subQuestions:    JSON.parse(JSON.stringify(cmSubQuestions))
+    });
+  }
+
+  cmSaveToGitHub(() => {
+    cmCloseModal();
+    cmSelectCase(cmEditTarget.caseIdx);
+  });
+}
+
+// ---- Delete Case ----
+function cmDeleteCase(idx) {
+  const c = cmCases[idx];
+  if (!confirm("Delete case \"" + (c.title||"Case "+(idx+1)) + "\" and ALL its questions?\n\nThis cannot be undone.")) return;
+  cmCases.splice(idx, 1);
+  cmCases.forEach((c, i) => c.order = i + 1);
+  if (cmActiveCaseIdx === idx) {
+    cmActiveCaseIdx = -1;
+    document.getElementById("cmQuestionSection").style.display = "none";
+  } else if (cmActiveCaseIdx > idx) {
+    cmActiveCaseIdx--;
+  }
+  cmSaveToGitHub(() => cmRenderCaseList());
+}
+
+// ---- Delete Question ----
+function cmDeleteQuestion(qi) {
+  const q = cmCases[cmActiveCaseIdx].questions[qi];
+  if (!confirm("Delete question \"" + (q.text || "Q"+(qi+1)) + "\"?\n\nThis cannot be undone.")) return;
+  cmCases[cmActiveCaseIdx].questions.splice(qi, 1);
+  cmCases[cmActiveCaseIdx].questions.forEach((q, i) => q.order = i + 1);
+  cmSaveToGitHub(() => cmSelectCase(cmActiveCaseIdx));
+}
+
+// Auto-load when tab opened
+const _origSwitchAdminTab = switchAdminTab;
+switchAdminTab = function(tab) {
+  _origSwitchAdminTab(tab);
+  if (tab === "content" && cmCases.length === 0) cmRefresh();
+};
+
+// =======================
+// SUB-QUESTION MANAGEMENT (admin panel)
+// =======================
+
+// In-memory store for sub-questions being edited
+let cmSubQuestions = [];
+
+function cmBuildSubQuestionList(subQuestions) {
+  cmSubQuestions = JSON.parse(JSON.stringify(subQuestions || [])); // deep copy
+  cmRenderSubQuestionList();
+}
+
+function cmRenderSubQuestionList() {
+  const list = document.getElementById("cmSubQuestionList");
+  if (!list) return;
+  list.innerHTML = "";
+
+  if (cmSubQuestions.length === 0) {
+    list.innerHTML = "<p style='color:var(--muted);font-size:12px;padding:8px 0;'>No sub-questions yet.</p>";
+    return;
+  }
+
+  cmSubQuestions.forEach((sq, idx) => {
+    const row = document.createElement("div");
+    row.style.cssText = "background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;";
+    row.innerHTML = `
+      <div style="display:flex;align-items:flex-start;gap:8px;">
+        <span style="font-size:11px;font-weight:700;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:24px;margin-top:2px;">↳${idx+1}</span>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:500;color:var(--text);margin-bottom:6px;">${escapeHtml(sq.text)||"<em style='color:var(--muted)'>No text</em>"}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--surface);border:1px solid var(--border);color:var(--muted);">${sq.questionType||"mc"}</span>
+            ${sq.imageType&&sq.imageType!=="none"?`<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:var(--surface);border:1px solid var(--border);color:var(--muted);">🖼 ${sq.imageType}</span>`:""}
+            ${(sq.subQuestions||[]).length>0?`<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:rgba(92,45,126,0.1);border:1px solid var(--accent);color:var(--accent);">↳ ${sq.subQuestions.length} sub-q</span>`:""}
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <button type="button" onclick="cmEditSubQuestion(${idx})" class="cm-btn">✏️</button>
+          <button type="button" onclick="cmMoveSubQuestion(${idx},-1)" class="cm-btn" ${idx===0?"disabled":""}>↑</button>
+          <button type="button" onclick="cmMoveSubQuestion(${idx},1)" class="cm-btn" ${idx===cmSubQuestions.length-1?"disabled":""}>↓</button>
+          <button type="button" onclick="cmDeleteSubQuestion(${idx})" class="cm-btn cm-btn-danger">🗑</button>
+        </div>
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+function cmAddSubQuestion() {
+  // Open a sub-modal or inline form — we use a simple prompt-based approach
+  // and open a nested edit form
+  cmSubQuestions.push({
+    id:            cmNewId("sq"),
+    order:         cmSubQuestions.length + 1,
+    text:          "",
+    content:       "",
+    questionType:  "mc",
+    suggestions:   "",
+    fieldLabels:   "",
+    imageType:     "none",
+    imageUrl:      "",
+    options:       [],
+    correctAnswer: "",
+    explanation:   "",
+    subQuestions:  []
+  });
+  cmEditSubQuestion(cmSubQuestions.length - 1);
+}
+
+function cmMoveSubQuestion(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= cmSubQuestions.length) return;
+  [cmSubQuestions[idx], cmSubQuestions[newIdx]] = [cmSubQuestions[newIdx], cmSubQuestions[idx]];
+  cmRenderSubQuestionList();
+}
+
+function cmDeleteSubQuestion(idx) {
+  if (!confirm("Delete this sub-question and all its sub-questions?")) return;
+  cmSubQuestions.splice(idx, 1);
+  cmRenderSubQuestionList();
+}
+
+// Edit sub-question in a nested panel inside the modal
+let cmEditingSubIdx = -1;
+let cmSubSubQuestions = []; // for sub-sub-questions
+
+function cmEditSubQuestion(idx) {
+  cmEditingSubIdx = idx;
+  const sq = cmSubQuestions[idx];
+
+  const title   = document.getElementById("cmModalTitle");
+  const body    = document.getElementById("cmModalBody");
+  const saveBtn = document.getElementById("cmModalSave");
+
+  title.innerText = "↳ Edit Sub-question " + (idx + 1);
+  body.innerHTML  = cmSubQuestionForm(sq);
+  saveBtn.onclick = cmSaveSubQuestion;
+
+  cmSubSubQuestions = JSON.parse(JSON.stringify(sq.subQuestions || []));
+  cmRenderSubSubQuestionList();
+
+  // Init cascading editor if needed
+  if (cmIsCascading(sq)) {
+    setTimeout(() => cmInitSQCascadeEditor(sq), 50);
+  }
+
+  // Add back button
+  const backBtn = document.createElement("button");
+  backBtn.className = "btn btn-secondary";
+  backBtn.innerText = "← Back to Question";
+  backBtn.style.cssText = "margin-right:auto;";
+  backBtn.onclick = cmBackFromSubQuestion;
+  const btnRow = saveBtn.parentElement;
+  // Remove existing back button if any
+  const existing = btnRow.querySelector(".btn-secondary");
+  if (existing) existing.remove();
+  btnRow.insertBefore(backBtn, btnRow.firstChild);
+}
+
+function cmSubQuestionForm(sq) {
+  const opts = ["A","B","C","D","E","F"];
+  const existing = sq.options || [];
+  const optRows = opts.map((code, i) => {
+    const val = existing[i] ? existing[i].label : "";
+    return `<div class="cm-option-row">
+      <span class="cm-option-code">${code}</span>
+      <input class="cm-input" id="cmSQ_opt${code}" value="${escapeHtml(val)}" placeholder="Option ${code}…">
+    </div>`;
+  }).join("");
+
+  const qtype = sq.questionType || "mc";
+  const itype = sq.imageType    || "none";
+  const isBase64 = sq.imageUrl && sq.imageUrl.startsWith("data:");
+
+  return `
+    <div style="background:rgba(92,45,126,0.05);border:1px solid var(--accent);border-radius:10px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--accent);font-weight:600;">
+      ↳ Sub-question — appears after the parent question is answered
+    </div>
+    <div class="cm-field">
+      <label class="cm-label">Question Text</label>
+      <textarea class="cm-textarea" id="cmSQ_text" placeholder="Follow-up question…">${escapeHtml(sq.text||"")}</textarea>
+    </div>
+    <div class="cm-field">
+      <label class="cm-label">Clinical Content (optional)</label>
+      <textarea class="cm-textarea" id="cmSQ_content" style="min-height:50px;">${escapeHtml(sq.content||"")}</textarea>
+    </div>
+    <div class="cm-grid2">
+      <div class="cm-field">
+        <label class="cm-label">Question Type</label>
+        <select class="cm-select" id="cmSQ_qtype" onchange="cmToggleSQFreetextFields()">
+          <option value="mc"      ${qtype==="mc"?"selected":""}>Multiple Choice</option>
+          <option value="freetext"${qtype==="freetext"?"selected":""}>Free Text</option>
+        </select>
+      </div>
+      <div class="cm-field">
+        <label class="cm-label">Image</label>
+        <select class="cm-select" id="cmSQ_itype" onchange="cmToggleSQImageFields()">
+          <option value="none"  ${itype==="none" ?"selected":""}>Inherit from parent</option>
+          <option value="dicom" ${itype==="dicom"?"selected":""}>DICOM (EBR viewer)</option>
+          <option value="image" ${itype==="image"?"selected":""}>Static image</option>
+        </select>
+      </div>
+    </div>
+    <input type="hidden" id="cmSQ_imageBase64" value="${isBase64?escapeHtml(sq.imageUrl):""}">
+    <div id="cmSQImageSection" style="display:${itype!=="none"?"block":"none"}">
+      <div class="cm-field">
+        <label class="cm-label">${itype==="dicom"?"EBR Viewer URL":"Image URL or upload"}</label>
+        <div id="cmSQUploadArea" style="display:${itype==="image"?"block":"none"}">
+          <div onclick="document.getElementById('cmSQFileInput').click()" style="border:2px dashed var(--border);border-radius:10px;padding:12px;text-align:center;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:6px;">
+            📁 Upload from laptop
+          </div>
+          <input type="file" id="cmSQFileInput" accept="image/*" style="display:none" onchange="cmHandleSQFileUpload(this)">
+          <img id="cmSQPreview" src="${isBase64?escapeHtml(sq.imageUrl):""}" style="display:${isBase64?"block":"none"};width:100%;max-height:120px;object-fit:contain;border-radius:8px;border:1px solid var(--border);margin-bottom:6px;">
+        </div>
+        <input class="cm-input" id="cmSQ_imageUrl" value="${escapeHtml(!isBase64?(sq.imageUrl||""):"")}" placeholder="${itype==="dicom"?"https://www.myebr.org/viewer/...":"https://…"}">
+      </div>
+    </div>
+    <div id="cmSQMcSection" style="display:${qtype==="freetext"?"none":"block"}">
+      <div class="cm-field"><label class="cm-label">Answer Options</label>${optRows}</div>
+      <div class="cm-field">
+        <label class="cm-label">Answer Selection Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${!sq.allowMultiSelect?"var(--accent)":"var(--border)"};background:${!sq.allowMultiSelect?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_multiSelect" id="cmSQ_single" value="single" ${!sq.allowMultiSelect?"checked":""} onchange="cmUpdateSQSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Single</div><div style="font-size:11px;color:var(--muted);">First click submits</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${sq.allowMultiSelect?"var(--accent)":"var(--border)"};background:${sq.allowMultiSelect?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_multiSelect" id="cmSQ_multi" value="multi" ${sq.allowMultiSelect?"checked":""} onchange="cmUpdateSQSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Multiple</div><div style="font-size:11px;color:var(--muted);">Candidate selects then submits</div></div>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div id="cmSQFtSection" style="display:${qtype==="freetext"?"block":"none"}">
+      <div class="cm-field">
+        <label class="cm-label">Suggestions Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${!cmIsCascading(sq)?"var(--accent)":"var(--border)"};background:${!cmIsCascading(sq)?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_sugMode" value="flat" ${!cmIsCascading(sq)?"checked":""} onchange="cmToggleSQSugMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Simple list</div><div style="font-size:11px;color:var(--muted);">Flat list of options</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${cmIsCascading(sq)?"var(--accent)":"var(--border)"};background:${cmIsCascading(sq)?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_sugMode" value="cascading" ${cmIsCascading(sq)?"checked":""} onchange="cmToggleSQSugMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Cascading</div><div style="font-size:11px;color:var(--muted);">Category → specific options</div></div>
+          </label>
+        </div>
+        <div id="cmSQFlatSugSection" style="display:${!cmIsCascading(sq)?"block":"none"}">
+          <input class="cm-input" id="cmSQ_suggestions" value="${escapeHtml(!cmIsCascading(sq)?sq.suggestions||"":"")}" placeholder="Option 1, Option 2…">
+        </div>
+        <div id="cmSQCascadingSugSection" style="display:${cmIsCascading(sq)?"block":"none"}">
+          <div id="cmSQCascadeItems" style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;"></div>
+          <button type="button" onclick="cmAddSQCascadeItem()" style="padding:7px 16px;border-radius:8px;border:1px dashed var(--border);background:none;color:var(--accent);font-size:13px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;width:100%;">+ Add category</button>
+          <input type="hidden" id="cmSQ_suggestions" value="${escapeHtml(cmIsCascading(sq)?sq.suggestions||"":"")}">
+        </div>
+      </div>
+      <div class="cm-field">
+        <label class="cm-label">Correct Answer</label>
+        <div id="cmSQCorrectStandard" style="display:${!cmIsCascading(sq)?"block":"none"}">
+          <input class="cm-input" id="cmSQ_correct" value="${escapeHtml(!cmIsCascading(sq)?sq.correctAnswer||"":"")}" placeholder="A or A,C or exact text">
+        </div>
+        <div id="cmSQCorrectCascading" style="display:${cmIsCascading(sq)?"block":"none"}">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Full combined answer e.g. <strong>Peripheral edema</strong></div>
+          <input class="cm-input" id="cmSQ_cascadeCorrect" value="${escapeHtml(cmIsCascading(sq)?sq.correctAnswer||"":"")}" placeholder="Peripheral edema, Central fibrosis…">
+        </div>
+      </div>
+      <div class="cm-field">
+        <label class="cm-label">Answer Selection Mode</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${sq.allowMultiSelect===false?"var(--accent)":"var(--border)"};background:${sq.allowMultiSelect===false?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_multiSelect" value="single" ${sq.allowMultiSelect===false?"checked":""} onchange="cmUpdateSQSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Single</div><div style="font-size:11px;color:var(--muted);">One selection only</div></div>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;border:2px solid ${sq.allowMultiSelect===true?"var(--accent)":"var(--border)"};background:${sq.allowMultiSelect===true?"rgba(92,45,126,0.08)":"var(--surface2)"};cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;">
+            <input type="radio" name="cmSQ_multiSelect" value="multi" ${sq.allowMultiSelect===true?"checked":""} onchange="cmUpdateSQSelectionMode()" style="accent-color:var(--accent);">
+            <div><div style="font-weight:600;">Multiple</div><div style="font-size:11px;color:var(--muted);">Candidate selects one or more</div></div>
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="cm-field">
+      <label class="cm-label">Explanation</label>
+      <textarea class="cm-textarea" id="cmSQ_explanation" style="min-height:60px;">${escapeHtml(sq.explanation||"")}</textarea>
+    </div>
+    <div class="cm-field">
+      <label class="cm-label" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Sub-sub-questions</span>
+        <button type="button" onclick="cmAddSubSubQuestion()" style="padding:4px 10px;border-radius:8px;border:1px dashed var(--border);background:none;color:var(--accent);font-size:11px;font-family:'DM Sans',sans-serif;font-weight:600;cursor:pointer;">+ Add</button>
+      </label>
+      <div id="cmSubSubQuestionList" style="margin-top:6px;display:flex;flex-direction:column;gap:6px;"></div>
+    </div>`;
+}
+
+function cmUpdateSQSelectionMode() {
+  document.querySelectorAll("input[name='cmSQ_multiSelect']").forEach(radio => {
+    const lbl = radio.closest("label");
+    if (!lbl) return;
+    lbl.style.borderColor = radio.checked ? "var(--accent)"         : "var(--border)";
+    lbl.style.background  = radio.checked ? "rgba(92,45,126,0.08)" : "var(--surface2)";
+  });
+}
+
+function cmToggleSQSugMode() {
+  const mode    = document.querySelector("input[name='cmSQ_sugMode']:checked")?.value;
+  const flatSec = document.getElementById("cmSQFlatSugSection");
+  const cascSec = document.getElementById("cmSQCascadingSugSection");
+  const stdCorr = document.getElementById("cmSQCorrectStandard");
+  const casCorr = document.getElementById("cmSQCorrectCascading");
+
+  if (flatSec) flatSec.style.display = mode === "flat"      ? "block" : "none";
+  if (cascSec) {
+    cascSec.style.display = mode === "cascading" ? "block" : "none";
+    if (mode === "cascading" && document.getElementById("cmSQCascadeItems").children.length === 0) {
+      cmAddSQCascadeItem();
+    }
+  }
+  if (stdCorr) stdCorr.style.display = mode === "flat"      ? "block" : "none";
+  if (casCorr) casCorr.style.display = mode === "cascading" ? "block" : "none";
+
+  document.querySelectorAll("input[name='cmSQ_sugMode']").forEach(r => {
+    const lbl = r.closest("label");
+    if (lbl) {
+      lbl.style.borderColor = r.checked ? "var(--accent)"         : "var(--border)";
+      lbl.style.background  = r.checked ? "rgba(92,45,126,0.08)" : "var(--surface2)";
+    }
+  });
+}
+
+function cmAddSQCascadeItem(label, sub) {
+  const container = document.getElementById("cmSQCascadeItems");
+  if (!container) return;
+  const idx = container.children.length;
+  const row = document.createElement("div");
+  row.style.cssText = "background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;";
+  row.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <span style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:20px;">${idx+1}</span>
+      <input class="cm-input cmSQ-cascade-label" value="${escapeHtml(label||"")}" placeholder="Category (e.g. Peripheral)" style="flex:1;" oninput="cmUpdateSQCascadeHidden()">
+      <button type="button" class="cm-btn cm-btn-danger" onclick="this.closest('div[style]').remove();cmRenumberSQCascade();cmUpdateSQCascadeHidden();">🗑</button>
+    </div>
+    <div style="padding-left:28px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Sub-options (comma-separated)</label>
+      <input class="cm-input cmSQ-cascade-sub" value="${escapeHtml(sub||"")}" placeholder="edema, congestion, consolidation" oninput="cmUpdateSQCascadeHidden()">
+    </div>`;
+  container.appendChild(row);
+  cmUpdateSQCascadeHidden();
+}
+
+function cmRenumberSQCascade() {
+  const container = document.getElementById("cmSQCascadeItems");
+  if (!container) return;
+  Array.from(container.children).forEach((row, i) => {
+    const num = row.querySelector("span");
+    if (num) num.innerText = i + 1;
+  });
+}
+
+function cmUpdateSQCascadeHidden() {
+  const container = document.getElementById("cmSQCascadeItems");
+  const hidden    = document.getElementById("cmSQ_suggestions");
+  if (!container || !hidden) return;
+  const data = Array.from(container.children).map(row => {
+    const labelEl = row.querySelector(".cmSQ-cascade-label");
+    const subEl   = row.querySelector(".cmSQ-cascade-sub");
+    const label   = labelEl ? labelEl.value.trim() : "";
+    const sub     = subEl ? subEl.value.split(",").map(s => s.trim()).filter(s => s) : [];
+    return { label, sub };
+  }).filter(item => item.label);
+  hidden.value = JSON.stringify(data);
+}
+
+function cmInitSQCascadeEditor(sq) {
+  if (!cmIsCascading(sq)) return;
+  try {
+    const data = JSON.parse(sq.suggestions);
+    const container = document.getElementById("cmSQCascadeItems");
+    if (!container) return;
+    container.innerHTML = "";
+    data.forEach(item => {
+      cmAddSQCascadeItem(item.label || item, (item.sub || []).join(", "));
+    });
+  } catch(e) {}
+}
+
+function cmToggleSQFreetextFields() {
+  const isFt = document.getElementById("cmSQ_qtype").value === "freetext";
+  document.getElementById("cmSQFtSection").style.display = isFt ? "block" : "none";
+  document.getElementById("cmSQMcSection").style.display = isFt ? "none"  : "block";
+}
+
+function cmToggleSQImageFields() {
+  const itype = document.getElementById("cmSQ_itype").value;
+  document.getElementById("cmSQImageSection").style.display  = itype !== "none" ? "block" : "none";
+  const up = document.getElementById("cmSQUploadArea");
+  if (up) up.style.display = itype === "image" ? "block" : "none";
+}
+
+function cmHandleSQFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const b64 = canvas.toDataURL("image/jpeg", 0.85);
+      const b64Input = document.getElementById("cmSQ_imageBase64");
+      if (b64Input) b64Input.value = b64;
+      const urlInput = document.getElementById("cmSQ_imageUrl");
+      if (urlInput) { urlInput.value = ""; urlInput.placeholder = "(uploaded image)"; }
+      const preview = document.getElementById("cmSQPreview");
+      if (preview) { preview.src = b64; preview.style.display = "block"; }
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Sub-sub-questions (just text + type — same pattern but simpler)
+function cmAddSubSubQuestion() {
+  cmSubSubQuestions.push({
+    id: cmNewId("ssq"), order: cmSubSubQuestions.length + 1,
+    text: "", content: "", questionType: "mc",
+    suggestions: "", imageType: "none", imageUrl: "",
+    options: [], correctAnswer: "", explanation: "",
+    allowMultiSelect: null, subQuestions: []
+  });
+  cmEditSubSubQuestion(cmSubSubQuestions.length - 1);
+}
+
+let cmEditingSubSubIdx = -1;
+
+function cmRenderSubSubQuestionList() {
+  const list = document.getElementById("cmSubSubQuestionList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (cmSubSubQuestions.length === 0) {
+    list.innerHTML = "<p style='color:var(--muted);font-size:11px;'>No sub-sub-questions yet.</p>";
+    return;
+  }
+  cmSubSubQuestions.forEach((ssq, idx) => {
+    const row = document.createElement("div");
+    row.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;gap:8px;align-items:flex-start;";
+    row.innerHTML = `
+      <span style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:28px;margin-top:2px;">↳↳${idx+1}</span>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:3px;">${escapeHtml(ssq.text)||"<em style='color:var(--muted)'>No text</em>"}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <span style="font-size:11px;padding:2px 7px;border-radius:20px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);">${ssq.questionType||"mc"}</span>
+          ${ssq.correctAnswer?`<span style="font-size:11px;padding:2px 7px;border-radius:20px;background:var(--surface2);border:1px solid var(--border);color:var(--muted);">✓ ${escapeHtml(ssq.correctAnswer)}</span>`:""}
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0;">
+        <button type="button" class="cm-btn" onclick="cmEditSubSubQuestion(${idx})">✏️ Edit</button>
+        <button type="button" class="cm-btn" onclick="cmMoveSSQ(${idx},-1)" ${idx===0?"disabled":""}>↑</button>
+        <button type="button" class="cm-btn" onclick="cmMoveSSQ(${idx},1)" ${idx===cmSubSubQuestions.length-1?"disabled":""}>↓</button>
+        <button type="button" class="cm-btn cm-btn-danger" onclick="cmDeleteSSQ(${idx})">🗑</button>
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+function cmMoveSSQ(idx, dir) {
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= cmSubSubQuestions.length) return;
+  [cmSubSubQuestions[idx], cmSubSubQuestions[newIdx]] = [cmSubSubQuestions[newIdx], cmSubSubQuestions[idx]];
+  cmRenderSubSubQuestionList();
+}
+
+function cmDeleteSSQ(idx) {
+  if (!confirm("Delete this sub-sub-question?")) return;
+  cmSubSubQuestions.splice(idx, 1);
+  cmRenderSubSubQuestionList();
+}
+
+function cmEditSubSubQuestion(idx) {
+  cmEditingSubSubIdx = idx;
+  const ssq = cmSubSubQuestions[idx];
+
+  const title   = document.getElementById("cmModalTitle");
+  const body    = document.getElementById("cmModalBody");
+  const saveBtn = document.getElementById("cmModalSave");
+
+  title.innerText = "↳↳ Edit Sub-sub-question " + (idx + 1);
+  body.innerHTML  = cmSubQuestionForm(ssq); // reuse same form structure
+  saveBtn.onclick = cmSaveSubSubQuestion;
+
+  // Add back button
+  const btnRow = saveBtn.parentElement;
+  const oldBack = btnRow.querySelector(".ssq-back-btn");
+  if (oldBack) oldBack.remove();
+  const backBtn = document.createElement("button");
+  backBtn.className = "btn btn-secondary ssq-back-btn";
+  backBtn.innerText = "← Back to Sub-question";
+  backBtn.style.marginRight = "auto";
+  backBtn.onclick = cmBackFromSubSubQuestion;
+  btnRow.insertBefore(backBtn, btnRow.firstChild);
+
+  // Re-init sub-sub-sub-questions section — hide it for simplicity
+  const sssSect = document.getElementById("cmSubSubQuestionList");
+  if (sssSect) {
+    const parent = sssSect.closest(".cm-field");
+    if (parent) parent.style.display = "none";
+  }
+}
+
+function cmSaveSubSubQuestion() {
+  const text        = document.getElementById("cmSQ_text").value.trim();
+  const content     = document.getElementById("cmSQ_content").value.trim();
+  const qtype       = document.getElementById("cmSQ_qtype").value;
+  const itype       = document.getElementById("cmSQ_itype").value;
+  const correct     = document.getElementById("cmSQ_correct").value.trim();
+  const explanation = document.getElementById("cmSQ_explanation").value.trim();
+  const suggestions = document.getElementById("cmSQ_suggestions") ? document.getElementById("cmSQ_suggestions").value.trim() : "";
+  const urlField    = document.getElementById("cmSQ_imageUrl") ? document.getElementById("cmSQ_imageUrl").value.trim() : "";
+  const b64Field    = document.getElementById("cmSQ_imageBase64") ? document.getElementById("cmSQ_imageBase64").value : "";
+  const multiRadio  = document.querySelector("input[name='cmSQ_multiSelect']:checked");
+  const allowMulti  = multiRadio ? multiRadio.value === "multi" : null;
+
+  if (!text) { cmMsg("Please enter the question text.", true); return; }
+
+  let imageUrl = "";
+  if (itype !== "none") {
+    if (b64Field && b64Field.startsWith("data:")) imageUrl = b64Field;
+    else if (urlField && !urlField.startsWith("(")) imageUrl = urlField;
+    else imageUrl = cmSubSubQuestions[cmEditingSubSubIdx].imageUrl || "";
+  }
+
+  const options = ["A","B","C","D","E","F"].map(code => ({
+    code,
+    label: document.getElementById("cmSQ_opt"+code) ? document.getElementById("cmSQ_opt"+code).value.trim() : ""
+  })).filter(o => o.label);
+
+  cmSubSubQuestions[cmEditingSubSubIdx] = {
+    ...cmSubSubQuestions[cmEditingSubSubIdx],
+    text, content, questionType: qtype, suggestions,
+    imageType: itype, imageUrl, options, correctAnswer: correct,
+    explanation, allowMultiSelect: allowMulti
+  };
+
+  cmBackFromSubSubQuestion();
+}
+
+function cmBackFromSubSubQuestion() {
+  cmEditingSubSubIdx = -1;
+  // Restore sub-question form
+  const sq = cmSubQuestions[cmEditingSubIdx] || {};
+  document.getElementById("cmModalTitle").innerText = "↳ Edit Sub-question " + (cmEditingSubIdx + 1);
+  document.getElementById("cmModalBody").innerHTML  = cmSubQuestionForm(sq);
+  document.getElementById("cmModalSave").onclick    = cmSaveSubQuestion;
+
+  // Re-init sub-sub-questions list
+  cmSubSubQuestions = JSON.parse(JSON.stringify(sq.subQuestions || []));
+  cmRenderSubSubQuestionList();
+
+  // Update back button to go back to parent question
+  const saveBtn = document.getElementById("cmModalSave");
+  const btnRow  = saveBtn.parentElement;
+  const oldBack = btnRow.querySelector(".ssq-back-btn, .btn-secondary:first-child");
+  if (oldBack) oldBack.remove();
+  const backBtn = document.createElement("button");
+  backBtn.className = "btn btn-secondary";
+  backBtn.innerText = "← Back to Question";
+  backBtn.style.marginRight = "auto";
+  backBtn.onclick = cmBackFromSubQuestion;
+  btnRow.insertBefore(backBtn, btnRow.firstChild);
+}
+
+function cmSaveSubQuestion() {
+  const text        = document.getElementById("cmSQ_text").value.trim();
+  const content     = document.getElementById("cmSQ_content").value.trim();
+  const qtype       = document.getElementById("cmSQ_qtype").value;
+  const itype       = document.getElementById("cmSQ_itype").value;
+  const explanation = document.getElementById("cmSQ_explanation").value.trim();
+  const urlField    = document.getElementById("cmSQ_imageUrl") ? document.getElementById("cmSQ_imageUrl").value.trim() : "";
+  const b64Field    = document.getElementById("cmSQ_imageBase64") ? document.getElementById("cmSQ_imageBase64").value : "";
+  const multiRadio  = document.querySelector("input[name='cmSQ_multiSelect']:checked");
+  const allowMultiSel = multiRadio ? multiRadio.value === "multi" : null;
+  const sugMode     = document.querySelector("input[name='cmSQ_sugMode']:checked")?.value || "flat";
+  const suggestions = document.getElementById("cmSQ_suggestions") ? document.getElementById("cmSQ_suggestions").value.trim() : "";
+  const correct     = sugMode === "cascading"
+    ? (document.getElementById("cmSQ_cascadeCorrect") ? document.getElementById("cmSQ_cascadeCorrect").value.trim() : "")
+    : (document.getElementById("cmSQ_correct") ? document.getElementById("cmSQ_correct").value.trim() : "");
+
+  if (!text) { cmMsg("Please enter the question text.", true); return; }
+
+  let imageUrl = "";
+  if (itype !== "none") {
+    if (itype !== "dicom" && b64Field && b64Field.startsWith("data:")) imageUrl = b64Field;
+    else if (urlField && !urlField.startsWith("("))  imageUrl = urlField;
+    else imageUrl = cmSubQuestions[cmEditingSubIdx].imageUrl || "";
+  }
+
+  const options = ["A","B","C","D","E","F"].map(code => ({
+    code,
+    label: document.getElementById("cmSQ_opt"+code) ? document.getElementById("cmSQ_opt"+code).value.trim() : ""
+  })).filter(o => o.label);
+
+  cmSubQuestions[cmEditingSubIdx] = {
+    ...cmSubQuestions[cmEditingSubIdx],
+    text, content, questionType: qtype, suggestions,
+    imageType: itype, imageUrl, options, correctAnswer: correct, explanation,
+    allowMultiSelect: allowMultiSel,
+    subQuestions: JSON.parse(JSON.stringify(cmSubSubQuestions))
+  };
+
+  cmBackFromSubQuestion();
+}
+
+function cmBackFromSubQuestion() {
+  cmEditingSubIdx = -1;
+  // Restore parent question form
+  const q = cmMode === "editQuestion"
+    ? cmCases[cmEditTarget.caseIdx].questions[cmEditTarget.questionIdx]
+    : {};
+  document.getElementById("cmModalTitle").innerText = cmMode === "editQuestion" ? "Edit Question" : "New Question";
+  document.getElementById("cmModalBody").innerHTML = cmQuestionForm(q);
+  document.getElementById("cmModalMsg").innerText = "";
+  document.getElementById("cmModalSave").onclick = cmSave;
+  // Remove back button if present
+  const backBtn = document.querySelector("#cmModal .btn-secondary:first-child");
+  if (backBtn && backBtn.innerText.includes("Back")) backBtn.remove();
+
+  if (q.questionType === "freetext") cmBuildFtAnswerList(q.correctAnswer || "");
+  cmRenderSubQuestionList();
+}
+
+
+// =======================
+// CASCADING SUGGESTIONS (admin panel)
+// =======================
+
+function cmIsCascading(q) {
+  const s = q.suggestions || "";
+  return s.trim().startsWith("[");
+}
+
+function cmToggleSugMode() {
+  const mode    = document.querySelector("input[name='cmF_sugMode']:checked")?.value;
+  const flatSec = document.getElementById("cmFlatSugSection");
+  const cascSec = document.getElementById("cmCascadingSugSection");
+  const stdCorr = document.getElementById("cmCorrectFtStandard");
+  const casCorr = document.getElementById("cmCorrectFtCascading");
+
+  if (flatSec) flatSec.style.display = mode === "flat"      ? "block" : "none";
+  if (cascSec) {
+    cascSec.style.display = mode === "cascading" ? "block" : "none";
+    if (mode === "cascading" && document.getElementById("cmCascadeItems").children.length === 0) {
+      cmAddCascadeItem();
+    }
+  }
+  if (stdCorr) stdCorr.style.display = mode === "flat"      ? "block" : "none";
+  if (casCorr) casCorr.style.display = mode === "cascading" ? "block" : "none";
+
+  // Update radio label styles
+  document.querySelectorAll("input[name='cmF_sugMode']").forEach(r => {
+    const lbl = r.closest("label");
+    if (lbl) {
+      lbl.style.borderColor = r.checked ? "var(--accent)"         : "var(--border)";
+      lbl.style.background  = r.checked ? "rgba(92,45,126,0.08)" : "var(--surface2)";
+    }
+  });
+}
+
+// Initialize cascading editor from existing data
+function cmInitCascadeEditor(q) {
+  if (!cmIsCascading(q)) return;
+  try {
+    const data = JSON.parse(q.suggestions);
+    const container = document.getElementById("cmCascadeItems");
+    if (!container) return;
+    container.innerHTML = "";
+    data.forEach(item => {
+      const label = item.label || item;
+      const sub   = (item.sub || []).join(", ");
+      cmAddCascadeItem(label, sub);
+    });
+  } catch(e) {}
+}
+
+function cmAddCascadeItem(label, sub) {
+  const container = document.getElementById("cmCascadeItems");
+  if (!container) return;
+  const idx = container.children.length;
+
+  const row = document.createElement("div");
+  row.style.cssText = "background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;";
+  row.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+      <span style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace;min-width:20px;">${idx+1}</span>
+      <input class="cm-input cm-cascade-label" value="${escapeHtml(label||"")}" placeholder="Category (e.g. Peripheral)" style="flex:1;" oninput="cmUpdateCascadeHidden()">
+      <button type="button" class="cm-btn cm-btn-danger" onclick="this.closest('div[style]').remove();cmRenumberCascade();cmUpdateCascadeHidden();">🗑</button>
+    </div>
+    <div style="padding-left:28px;">
+      <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px;">Sub-options (comma-separated)</label>
+      <input class="cm-input cm-cascade-sub" value="${escapeHtml(sub||"")}" placeholder="edema, congestion, consolidation" oninput="cmUpdateCascadeHidden()">
+    </div>`;
+  container.appendChild(row);
+  cmUpdateCascadeHidden();
+}
+
+function cmRenumberCascade() {
+  const container = document.getElementById("cmCascadeItems");
+  if (!container) return;
+  Array.from(container.children).forEach((row, i) => {
+    const num = row.querySelector("span");
+    if (num) num.innerText = i + 1;
+  });
+}
+
+function cmUpdateCascadeHidden() {
+  const container = document.getElementById("cmCascadeItems");
+  const hidden    = document.getElementById("cmF_suggestions");
+  if (!container || !hidden) return;
+
+  const data = Array.from(container.children).map(row => {
+    const labelEl = row.querySelector(".cm-cascade-label");
+    const subEl   = row.querySelector(".cm-cascade-sub");
+    const label   = labelEl ? labelEl.value.trim() : "";
+    const sub     = subEl ? subEl.value.split(",").map(s => s.trim()).filter(s => s) : [];
+    return { label, sub };
+  }).filter(item => item.label);
+
+  hidden.value = JSON.stringify(data);
+}
+
+// Call after modal opens for freetext cascading questions
+function cmInitQuestionForm(q) {
+  if (cmIsCascading(q)) {
+    setTimeout(() => {
+      cmInitCascadeEditor(q);
+      // Show cascading correct answer section
+      const stdCorr = document.getElementById("cmCorrectFtStandard");
+      const casCorr = document.getElementById("cmCorrectFtCascading");
+      if (stdCorr) stdCorr.style.display = "none";
+      if (casCorr) casCorr.style.display = "block";
+    }, 50);
+  }
+}
+
+
+// =======================
+// LIVE REVEAL
+// =======================
+// Simple, reliable implementation:
+// 1. presentFeedback() ALWAYS does a fresh fetch of reveal state before deciding
+// 2. If liveMode ON and question not revealed → waiting screen
+// 3. Poll every 3s while on waiting screen → show feedback when revealed
+// 4. Admin panel controls liveMode and per-question reveals
+// =======================
+
+let liveMode        = false;
+let revealedKeys    = new Set();
+let livePollTimer   = null;
+let _adminCode      = null; // set when admin logs in
+let liveRevealState = { courseStarted: false, questionTimer: null }; // full state cache
+
+// ── Fetch current state from Worker ──────────────────────────────────────────
+async function fetchRevealState() {
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "getRevealState" })
+    });
+    const data = await res.json();
+    if (data && !data.error) {
+      liveMode        = !!data.liveMode;
+      revealedKeys    = new Set(data.revealedKeys || []);
+      liveRevealState = {
+        courseStarted: !!data.courseStarted,
+        questionTimer: data.questionTimer || null
+      };
+    } else if (data && data.error) {
+      console.warn("[live] Worker error:", data.error);
+    }
+    return data;
+  } catch (e) {
+    console.warn("[live] fetchRevealState failed:", e.message);
+    return null;
+  }
+}
+
+// ── Save state to Worker (admin only) ────────────────────────────────────────
+async function pushRevealState(newLiveMode, newRevealedKeys) {
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action:       "setRevealState",
+        adminCode:    _adminCode,
+        liveMode:     newLiveMode,
+        revealedKeys: newRevealedKeys
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      adminRevealStatus("Error: " + (data.error || res.status), true);
+      return false;
+    }
+    liveMode     = !!data.state.liveMode;
+    revealedKeys = new Set(data.state.revealedKeys || []);
+    adminRevealStatus("✓ Saved · " + new Date().toLocaleTimeString());
+    return true;
+  } catch (e) {
+    adminRevealStatus("Network error: " + e.message, true);
+    return false;
+  }
+}
+
+// ── Participant: called instead of showScreen("feedback") after every submit ─
+async function presentFeedback() {
+  try { saveProgress(); } catch(e) {}
+
+  // Always do a fresh fetch so we have the current liveMode
+  await fetchRevealState();
+
+  const key = answerKey();
+
+  if (!liveMode || revealedKeys.has(key)) {
+    // Live mode off, or this question already revealed → show feedback now
+    showScreen("feedback");
+    return;
+  }
+
+  // Live mode is ON and answer not yet revealed → show waiting screen
+  _populateWaitingScreen(key);
+  showScreen("waiting");
+  _startWaitingPoll(key);
+}
+
+function _populateWaitingScreen(key) {
+  const box  = document.getElementById("waitingYourAnswer");
+  const text = document.getElementById("waitingYourAnswerText");
+  if (!box || !text) return;
+  const stored = userAnswers[key];
+  if (stored && stored.userAnswers && stored.userAnswers.length) {
+    const q = getCurrentQuestion();
+    let display = stored.userAnswers.join(", ");
+    if (q && q.options && q.options.length) {
+      display = stored.userAnswers.map(a => {
+        const opt = q.options.find(o => o.code === String(a).toUpperCase());
+        return opt ? opt.label : a;
+      }).join(", ");
+    }
+    text.innerText = display;
+    box.style.display = "block";
+  } else {
+    box.style.display = "none";
+  }
+}
+
+function _startWaitingPoll(key) {
+  if (livePollTimer) clearInterval(livePollTimer);
+  livePollTimer = setInterval(async () => {
+    await fetchRevealState();
+    const waiting = document.getElementById("waiting");
+    if (!waiting || !waiting.classList.contains("active")) {
+      clearInterval(livePollTimer); livePollTimer = null; return;
+    }
+    if (!liveMode || revealedKeys.has(key)) {
+      clearInterval(livePollTimer); livePollTimer = null;
+      showScreen("feedback");
+    }
+  }, 3000);
+}
+
+// Continuous background poll — runs the entire time a participant is in the
+// course. If the speaker stops the course (courseStarted → false), sends them
+// back to the waiting-for-start screen immediately.
+let _bgPollTimer = null;
+const _courseScreens = new Set(["caseIntro","question","feedback","waiting","results","review"]);
+
+function startBackgroundPoll() {
+  if (_bgPollTimer) return;
+  _bgPollTimer = setInterval(async () => {
+    await fetchRevealState();
+    // If speaker stopped the course while participant is inside it → send back
+    if (liveMode && !liveRevealState.courseStarted) {
+      const active = document.querySelector(".screen.active");
+      if (active && _courseScreens.has(active.id) && active.id !== "results") {
+        stopBackgroundPoll();
+        showScreen("waitingForStart");
+        _pollUntilCourseStart(_savedProgress);
+      }
+    }
+  }, 3000);
+}
+
+function stopBackgroundPoll() {
+  if (_bgPollTimer) { clearInterval(_bgPollTimer); _bgPollTimer = null; }
+}
+
+// ── Admin controls ────────────────────────────────────────────────────────────
+
+function adminRevealStatus(msg, isErr) {
+  const el = document.getElementById("adminRevealStatus");
+  if (!el) return;
+  el.innerText = msg;
+  el.style.color = isErr ? "var(--danger)" : "var(--accent)";
+}
+
+async function adminLoadRevealState() {
+  adminRevealStatus("Loading…");
+  const data = await fetchRevealState();
+  if (!data) { adminRevealStatus("Could not load — check Worker is deployed", true); return; }
+  if (data.error) { adminRevealStatus("Worker error: " + data.error, true); return; }
+  const toggle = document.getElementById("adminLiveMode");
+  if (toggle) toggle.checked = liveMode;
+  adminRevealStatus(liveMode ? "🔴 Live Mode is ON" : "Live Mode is OFF");
+  adminRenderRevealList();
+}
+
+async function adminToggleLiveMode() {
+  const toggle = document.getElementById("adminLiveMode");
+  const newMode = toggle ? toggle.checked : false;
+  const ok = await pushRevealState(newMode, Array.from(revealedKeys));
+  if (ok) {
+    adminRevealStatus(newMode ? "🔴 Live Mode is ON — participants will see waiting screen" : "Live Mode is OFF — answers reveal immediately");
+    adminRenderRevealList();
+  } else {
+    // revert toggle if failed
+    if (toggle) toggle.checked = !newMode;
+  }
+}
+
+async function adminToggleReveal(key) {
+  const newKeys = new Set(revealedKeys);
+  if (newKeys.has(key)) newKeys.delete(key); else newKeys.add(key);
+  const ok = await pushRevealState(liveMode, Array.from(newKeys));
+  if (ok) adminRenderRevealList();
+}
+
+async function adminRevealAll() {
+  const allKeys = _collectAllKeys();
+  const ok = await pushRevealState(liveMode, allKeys);
+  if (ok) adminRenderRevealList();
+}
+
+async function adminClearReveals() {
+  const ok = await pushRevealState(liveMode, []);
+  if (ok) adminRenderRevealList();
+}
+
+function _collectAllKeys() {
+  const keys = [];
+  function walk(questions, prefix, cIdx) {
+    (questions || []).forEach((q, i) => {
+      const path = prefix.concat(i);
+      keys.push(cIdx + "_" + path.join("_"));
+      walk(q.subQuestions || [], path, cIdx);
+    });
+  }
+  (cases || []).forEach((c, cIdx) => walk(c.questions || [], [], cIdx));
+  return keys;
+}
+
+function adminRenderRevealList() {
+  const container = document.getElementById("adminRevealList");
+  if (!container) return;
+  if (!cases || cases.length === 0) {
+    container.innerHTML = '<p style="padding:24px;text-align:center;color:var(--muted);font-size:13px;">No cases loaded yet.</p>';
+    return;
+  }
+  let html = "";
+  cases.forEach((c, cIdx) => {
+    html += `<div style="padding:10px 14px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);">Case ${cIdx + 1} · ${escapeHtml((c.intro || "").slice(0, 70))}</div>`;
+    function renderRow(q, path, depth) {
+      const key        = cIdx + "_" + path.join("_");
+      const num        = path.map(i => i + 1).join(".");
+      const isRevealed = revealedKeys.has(key);
+      const indent     = 14 + depth * 20;
+      html += `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px 10px ${indent}px;border-bottom:1px solid var(--border);background:${isRevealed ? "rgba(92,45,126,0.06)" : "var(--surface)"};">
+        <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--muted);min-width:38px;">Q${num}</div>
+        <div style="flex:1;font-size:13px;color:var(--text);">${escapeHtml((q.text || "(no text)").slice(0, 100))}</div>
+        <button class="btn ${isRevealed ? "btn-secondary" : "btn-primary"}" style="font-size:11px;padding:6px 14px;" onclick="adminToggleReveal('${key}')">${isRevealed ? "✓ Revealed" : "Reveal"}</button>
+      </div>`;
+      (q.subQuestions || []).forEach((sq, sIdx) => renderRow(sq, path.concat(sIdx), depth + 1));
+    }
+    (c.questions || []).forEach((q, qIdx) => renderRow(q, [qIdx], 0));
+  });
+  container.innerHTML = html;
+}
+
+// ── Wire up admin login to capture the admin code ─────────────────────────────
+// Patch openAdmin to store _adminCode (already done above in the openAdmin edit)
+// But also intercept switchAdminTab to load state when Live tab is opened.
+(function() {
+  const _orig = switchAdminTab;
+  switchAdminTab = function(tab) {
+    _orig(tab);
+    if (tab === "live") adminLoadRevealState();
+  };
+})();
+
+// =======================
+// SPEAKER PANEL
+// =======================
+
+let _speakerCode = null;
+
+function openSpeaker() {
+  const pwd = document.getElementById("speakerPassword");
+  const errEl = document.getElementById("speakerError");
+  if (!pwd) return;
+  const code = pwd.value.trim();
+  fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "validateSpeakerCode", code })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.valid) { if (errEl) errEl.style.display = "block"; return; }
+    if (errEl) errEl.style.display = "none";
+    _speakerCode = code;
+    _adminCode   = code; // speaker can also call setRevealState
+    showScreen("speaker");
+    speakerRefresh();
+  })
+  .catch(() => { if (errEl) errEl.style.display = "block"; });
+}
+
+async function speakerRefresh() {
+  // Load course settings (active/time)
+  speakerLoadCourseStatus();
+  // Load reveal state
+  const data = await fetchRevealState();
+  if (!data || data.error) {
+    speakerStatus("Could not reach server — check connection.", true);
+    return;
+  }
+  const toggle = document.getElementById("speakerLiveMode");
+  if (toggle) toggle.checked = liveMode;
+  speakerStatus(liveMode ? "🔴 Live Mode is ON — participants will wait for your reveal" : "Live Mode is OFF — answers show immediately after submit");
+  speakerRenderRevealList();
+}
+
+async function speakerToggleLiveMode() {
+  const toggle = document.getElementById("speakerLiveMode");
+  const newMode = toggle ? toggle.checked : false;
+  speakerStatus("Saving…");
+  const ok = await pushRevealState(newMode, Array.from(revealedKeys));
+  if (ok) {
+    speakerStatus(newMode
+      ? "🔴 Live Mode is ON — participants will see the waiting screen after submitting"
+      : "⚪ Live Mode is OFF — answers show immediately");
+    speakerRenderRevealList();
+  } else {
+    if (toggle) toggle.checked = !newMode; // revert
+  }
+}
+
+async function speakerRevealAll() {
+  speakerStatus("Revealing all…");
+  const allKeys = _collectAllKeys();
+  const ok = await pushRevealState(liveMode, allKeys);
+  if (ok) { speakerStatus("✓ All answers revealed"); speakerRenderRevealList(); }
+}
+
+async function speakerClearReveals() {
+  speakerStatus("Hiding all answers…");
+  const ok = await pushRevealState(liveMode, []);
+  if (ok) { speakerStatus("✓ All answers hidden"); speakerRenderRevealList(); }
+}
+
+async function speakerToggleReveal(key) {
+  const newKeys = new Set(revealedKeys);
+  if (newKeys.has(key)) newKeys.delete(key); else newKeys.add(key);
+  const ok = await pushRevealState(liveMode, Array.from(newKeys));
+  if (ok) speakerRenderRevealList();
+}
+
+function speakerStatus(msg, isErr) {
+  const el = document.getElementById("speakerRevealStatus");
+  if (!el) return;
+  el.innerText = msg;
+  el.style.color = isErr ? "var(--danger)" : "var(--accent)";
+}
+
+function speakerRenderRevealList() {
+  const container = document.getElementById("speakerRevealList");
+  if (!container) return;
+  if (!cases || cases.length === 0) {
+    container.innerHTML = '<p style="padding:28px;text-align:center;color:var(--muted);font-size:13px;">No cases loaded yet.</p>';
+    return;
+  }
+  let html = "";
+  cases.forEach((c, cIdx) => {
+    html += `<div style="padding:10px 18px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);">
+      Case ${cIdx + 1} · ${escapeHtml((c.intro || "").slice(0, 80))}
+    </div>`;
+    function renderRow(q, path, depth) {
+      const key        = cIdx + "_" + path.join("_");
+      const num        = path.map(i => i + 1).join(".");
+      const isRevealed = revealedKeys.has(key);
+      const indent     = 18 + depth * 20;
+      html += `
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 18px 12px ${indent}px;border-bottom:1px solid var(--border);background:${isRevealed ? "rgba(92,45,126,0.06)" : "var(--surface)"};">
+          <div style="font-size:13px;font-family:'JetBrains Mono',monospace;color:var(--muted);min-width:38px;">Q${num}</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;color:var(--text);font-weight:500;">${escapeHtml((q.text || "(no text)").slice(0, 120))}</div>
+            ${isRevealed ? `<div style="font-size:11px;color:var(--accent);margin-top:3px;">✓ Answer revealed to participants</div>` : `<div style="font-size:11px;color:var(--muted);margin-top:3px;">Answer hidden</div>`}
+          </div>
+          <button class="btn ${isRevealed ? "btn-secondary" : "btn-primary"}" style="font-size:12px;padding:8px 18px;white-space:nowrap;"
+            onclick="speakerToggleReveal('${key}')">
+            ${isRevealed ? "🔒 Hide" : "🔓 Reveal"}
+          </button>
+        </div>`;
+      (q.subQuestions || []).forEach((sq, sIdx) => renderRow(sq, path.concat(sIdx), depth + 1));
+    }
+    (c.questions || []).forEach((q, qIdx) => renderRow(q, [qIdx], 0));
+  });
+  container.innerHTML = html;
+}
+
+function speakerLoadCourseStatus() {
+  const statusEl = document.getElementById("speakerCourseStatus");
+  const timeEl   = document.getElementById("speakerCourseTime");
+  loadCourseSettings().then(s => {
+    if (!s || !statusEl) return;
+    const access = checkCourseAccess ? checkCourseAccess() : null;
+    if (access && access.allowed) {
+      statusEl.innerHTML = `<span style="color:var(--accent);">● Active</span>`;
+      timeEl.innerText   = s.endDate ? "Ends: " + new Date(s.endDate).toLocaleString() : "";
+    } else {
+      statusEl.innerHTML = `<span style="color:var(--muted);">○ Inactive</span>`;
+      timeEl.innerText   = access ? (access.reason || "") : "";
+    }
+  }).catch(() => {
+    if (statusEl) statusEl.innerText = "Could not load settings";
+  });
+}
+
+// =======================
+// COURSE ENTRY HELPERS
+// =======================
+
+function _enterCourse(saved) {
+  if (saved && saved.answers && saved.answers !== "{}" && saved.caseIndex !== -1) {
+    currentCaseIndex     = saved.caseIndex;
+    currentQuestionIndex = saved.questionIndex;
+    score                = saved.score;
+    courseTimeLeft       = saved.timeLeft;
+    try { userAnswers = JSON.parse(saved.answers); } catch(e) { userAnswers = {}; }
+    playerName = saved.name || playerName;
+    startCourseTimer();
+    updateProgress();
+    showScreen("question");
+    setTimeout(() => loadQuestion(), 50);
+  } else {
+    currentCaseIndex = 0; currentQuestionIndex = 0; score = 0; userAnswers = {};
+    startCourseTimer();
+    updateProgress();
+    loadCaseIntro();
+    showScreen("caseIntro");
+  }
+  startBackgroundPoll(); // watch for speaker stopping the course
+}
+
+// Polls until speaker starts the course, then enters
+let _startPollTimer = null;
+let _savedProgress  = null;
+
+function _pollUntilCourseStart(saved) {
+  _savedProgress = saved;
+  if (_startPollTimer) clearInterval(_startPollTimer);
+  _startPollTimer = setInterval(async () => {
+    await fetchRevealState();
+    const waiting = document.getElementById("waitingForStart");
+    if (!waiting || !waiting.classList.contains("active")) {
+      clearInterval(_startPollTimer); _startPollTimer = null; return;
+    }
+    if (liveRevealState.courseStarted) {
+      clearInterval(_startPollTimer); _startPollTimer = null;
+      _enterCourse(_savedProgress);
+    }
+  }, 3000);
+}
+
+// =======================
+// QUESTION TIMER (30s synchronized)
+// =======================
+
+// =======================
+// SPEAKER PANEL — extended
+// =======================
+
+async function speakerStartCourse() {
+  speakerStatus("Starting course…");
+  const ok = await pushRevealState(liveMode, Array.from(revealedKeys), true, null);
+  if (ok) {
+    speakerStatus("✓ Course started — participants can now enter");
+    _updateSpeakerStartStopBtns(true);
+  }
+}
+
+async function speakerStopCourse() {
+  if (!confirm("Stop the course? Participants will be sent back to the waiting screen.")) return;
+  speakerStatus("Stopping course…");
+  const ok = await pushRevealState(liveMode, Array.from(revealedKeys), false, null);
+  if (ok) {
+    speakerStatus("⏹ Course stopped");
+    _updateSpeakerStartStopBtns(false);
+  }
+}
+
+function _updateSpeakerStartStopBtns(started) {
+  const startBtn = document.getElementById("speakerStartBtn");
+  const stopBtn  = document.getElementById("speakerStopBtn");
+  if (startBtn) startBtn.style.display = started ? "none"       : "inline-flex";
+  if (stopBtn)  stopBtn.style.display  = started ? "inline-flex": "none";
+}
+
+// Override pushRevealState to accept courseStarted + questionTimer parameters
+const _origPushRevealState = pushRevealState;
+pushRevealState = async function(newLiveMode, newRevealedKeys, newCourseStarted, newQuestionTimer) {
+  try {
+    const payload = {
+      action:        "setRevealState",
+      adminCode:     _adminCode,
+      liveMode:      newLiveMode      !== undefined ? newLiveMode      : liveMode,
+      revealedKeys:  newRevealedKeys  !== undefined ? newRevealedKeys  : Array.from(revealedKeys),
+      courseStarted: newCourseStarted !== undefined ? newCourseStarted : liveRevealState.courseStarted,
+      questionTimer: newQuestionTimer !== undefined ? newQuestionTimer : liveRevealState.questionTimer
+    };
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      speakerStatus ? speakerStatus("Error: " + (data.error || res.status), true) : null;
+      adminRevealStatus ? adminRevealStatus("Error: " + (data.error || res.status), true) : null;
+      return false;
+    }
+    liveMode        = !!data.state.liveMode;
+    revealedKeys    = new Set(data.state.revealedKeys || []);
+    liveRevealState = {
+      courseStarted: !!data.state.courseStarted,
+      questionTimer: data.state.questionTimer || null
+    };
+    const statusMsg = "✓ Saved · " + new Date().toLocaleTimeString();
+    if (typeof speakerStatus  === "function") speakerStatus(statusMsg);
+    if (typeof adminRevealStatus === "function") adminRevealStatus(statusMsg);
+    return true;
+  } catch (e) {
+    const errMsg = "Network error: " + e.message;
+    if (typeof speakerStatus  === "function") speakerStatus(errMsg, true);
+    if (typeof adminRevealStatus === "function") adminRevealStatus(errMsg, true);
+    return false;
+  }
+};
+
+// Override speakerRenderRevealList to include timer button
+const _origSpeakerRenderRevealList = speakerRenderRevealList;
+speakerRenderRevealList = function() {
+  const container = document.getElementById("speakerRevealList");
+  if (!container) return;
+  if (!cases || cases.length === 0) {
+    container.innerHTML = '<p style="padding:28px;text-align:center;color:var(--muted);font-size:13px;">No cases loaded.</p>';
+    return;
+  }
+  let html = "";
+  cases.forEach((c, cIdx) => {
+    html += `<div style="padding:10px 18px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);">
+      Case ${cIdx + 1} · ${escapeHtml((c.intro || "").slice(0, 80))}
+    </div>`;
+    function renderRow(q, path, depth) {
+      const key        = cIdx + "_" + path.join("_");
+      const num        = path.map(i => i + 1).join(".");
+      const isRevealed = revealedKeys.has(key);
+      const indent = 18 + depth * 20;
+      html += `
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 18px 12px ${indent}px;border-bottom:1px solid var(--border);background:${isRevealed ? "rgba(92,45,126,0.06)" : "var(--surface)"};">
+          <div style="font-size:13px;font-family:'JetBrains Mono',monospace;color:var(--muted);min-width:36px;">Q${num}</div>
+          <div style="flex:1;">
+            <div style="font-size:14px;color:var(--text);font-weight:500;">${escapeHtml((q.text || "(no text)").slice(0, 110))}</div>
+            <div style="font-size:11px;margin-top:3px;color:var(--muted);">${isRevealed ? "✓ Answer revealed to participants" : "Answer hidden"}</div>
+          </div>
+          <button class="btn ${isRevealed ? "btn-secondary" : "btn-primary"}" style="font-size:11px;padding:6px 14px;" onclick="speakerToggleReveal('${key}')">
+            ${isRevealed ? "🔒 Hide" : "🔓 Reveal"}
+          </button>
+        </div>`;
+      (q.subQuestions || []).forEach((sq, sIdx) => renderRow(sq, path.concat(sIdx), depth + 1));
+    }
+    (c.questions || []).forEach((q, qIdx) => renderRow(q, [qIdx], 0));
+  });
+  container.innerHTML = html;
+};
+
+// Update speakerRefresh to also update start/stop button state
+const _origSpeakerRefresh = speakerRefresh;
+speakerRefresh = async function() {
+  speakerLoadCourseStatus();
+  const data = await fetchRevealState();
+  if (!data || data.error) { speakerStatus("Could not reach server.", true); return; }
+  const toggle = document.getElementById("speakerLiveMode");
+  if (toggle) toggle.checked = liveMode;
+  _updateSpeakerStartStopBtns(liveRevealState.courseStarted);
+  speakerStatus(liveMode
+    ? "🔴 Live Mode ON — participants wait for reveal"
+    : "Live Mode OFF — answers show immediately");
+  speakerRenderRevealList();
+};
